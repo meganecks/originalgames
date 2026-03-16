@@ -606,7 +606,8 @@
 
         function fireMissiles() {
             if (gameState.reloadTimer > 0) return; // Cannot fire while reloading
-            if (gameState.ammo < gameState.maxLocks) return; // Not enough ammo to fire a full barrage
+            let totalLocks = enemies.reduce((sum, e) => sum + e.locks, 0);
+            if (gameState.ammo < totalLocks) return; // Not enough ammo to fire current locks
             
             let targets = enemies.filter(e => e.locks > 0);
             if (targets.length === 0) return;
@@ -710,9 +711,10 @@
         }
 
         function spawnEnemy() {
-            if (gameState.bossActive) return; 
+            // Strictly prevent mob spawning while a boss is active to focus firepower
+            if (enemies.some(e => e.isBoss)) return; 
             
-            if (gameState.level > 0 && gameState.level % 3 === 0 && !enemies.some(e => e.isBoss)) {
+            if (gameState.level > 0 && gameState.level % 5 === 0) {
                 gameState.bossActive = true;
                 enemies = []; 
                 addMessage("> ALERT: Massive energy signature detected... Possible Boss encounter.", "#f00");
@@ -726,8 +728,8 @@
                 enemies.push({
                     x: bx, y: 0, z: bz,
                     radius: 200,
-                    hp: 200 + (gameState.level * 100), 
-                    maxHp: 200 + (gameState.level * 100),
+                    hp: 150 + (gameState.level * 60), 
+                    maxHp: 150 + (gameState.level * 60),
                     locks: 0, targeted: false,
                     speed: 120,
                     hoverTime: 0,
@@ -738,16 +740,16 @@
                     dashCooldown: 0 
                 });
 
-                // Escort Drones: 6 drones circling the boss
+                // Core Launchers: 6 hexagonal sub-units that control boss firepower
                 for (let i = 0; i < 6; i++) {
                     let eAng = (i / 6) * Math.PI * 2;
                     enemies.push({
                         x: bx + Math.cos(eAng) * 400, y: 80, z: bz + Math.sin(eAng) * 400,
-                        radius: 25, hp: 5, maxHp: 5,
+                        radius: 35, hp: 12, maxHp: 12, // Tougher components
                         locks: 0, targeted: false,
                         speed: 400, hoverTime: Math.random() * 10,
                         state: 'escort', stateTimer: 0,
-                        isBoss: false, type: 'escort',
+                        isBoss: false, type: 'launcher',
                         squadId: bossId, // link to boss
                         orbitAngle: eAng
                     });
@@ -773,11 +775,15 @@
                 enemies.push({ x: cx + offX, y: 0, z: cz + offZ, radius: 12, hp: 1, maxHp: 1, locks: 0, targeted: false, speed: 280 + (gameState.level * 20), hoverTime: Math.random() * 10, state: 'approach', stateTimer: 0, isBoss: false, type: 'gunner', dashCooldown: 0, interceptCooldown: 0, squadId: squadId });
             }
             
-            // Patrols (Weak) x 3
-            for(let i=0; i<3; i++) {
-                let offX = (Math.random() - 0.5) * 300;
-                let offZ = (Math.random() - 0.5) * 300;
-                enemies.push({ x: cx + offX, y: 0, z: cz + offZ, radius: 10, hp: 1, maxHp: 1, locks: 0, targeted: false, speed: 320 + (gameState.level * 20), hoverTime: Math.random() * 10, state: 'approach', stateTimer: 0, isBoss: false, type: 'patrol', dashCooldown: 0, interceptCooldown: 0, squadId: squadId });
+            // Interceptor Squad (High-speed scouts) x 1 squad
+            if (gameState.level >= 2 && Math.random() < 0.3) {
+                for(let i=0; i<2; i++) {
+                    let offX = (Math.random() - 0.5) * 400;
+                    let offZ = (Math.random() - 0.5) * 400;
+                    enemies.push({ x: cx + offX, y: 0, z: cz + offZ, radius: 10, hp: 8, maxHp: 8, locks: 0, targeted: false, 
+                                   speed: 500 + (gameState.level * 20), hoverTime: Math.random() * 10, state: 'approach', stateTimer: 0, 
+                                   isBoss: false, type: 'interceptor', dashCooldown: 0, squadId: squadId });
+                }
             }
         }
 
@@ -834,8 +840,10 @@
                 for (let e of enemies) {
                     let inDroneRange = drones.some(d => Math.hypot(e.x - d.x, e.z - d.z) < d.radarRadius);
                     let inPlayerRange = Math.hypot(e.x - player.x, e.z - player.z) < playerSensorRadius;
-                    // Global Boss tracking: Bosses are ALWAYS valid targets regardless of radar range
-                    if ((inDroneRange || inPlayerRange || e.isBoss) && e.locks < (e.isBoss ? 15 : 4)) {
+                    // Global Boss & Launcher tracking: Always valid targets regardless of range
+                    let isGlobalTarget = e.isBoss || e.type === 'launcher';
+                    let lockCap = e.isBoss ? Math.max(15, gameState.maxLocks) : (e.type === 'launcher' ? 6 : 4);
+                    if ((inDroneRange || inPlayerRange || isGlobalTarget) && e.locks < lockCap) {
                         validTargets.push(e);
                     }
                 }
@@ -845,6 +853,11 @@
                     let cx = (drones[0].x + drones[1].x + drones[2].x) / 3;
                     let cz = (drones[0].z + drones[1].z + drones[2].z) / 3;
                     validTargets.sort((a,b) => {
+                        // Priority 1: Launchers first (to disable weapons)
+                        let aPrio = a.type === 'launcher' ? 0 : (a.isBoss ? 2 : 1);
+                        let bPrio = b.type === 'launcher' ? 0 : (b.isBoss ? 2 : 1);
+                        if (aPrio !== bPrio) return aPrio - bPrio;
+                        
                         if (a.locks !== b.locks) return a.locks - b.locks;
                         return Math.hypot(a.x - cx, a.z - cz) - Math.hypot(b.x - cx, b.z - cz);
                     });
@@ -857,11 +870,13 @@
                     });
                 }
                 
-                // Auto Fire condition (Only if not reloading AND have ammo)
+                // Auto Fire condition: Full barrage OR Target Saturation (all current targets are max-locked)
                 totalLocks = enemies.reduce((sum, e) => sum + e.locks, 0);
-                if (totalLocks >= gameState.maxLocks && gameState.reloadTimer <= 0 && gameState.ammo >= gameState.maxLocks) {
+                let isSaturated = totalLocks > 0 && validTargets.length === 0;
+                
+                if ((totalLocks >= gameState.maxLocks || isSaturated) && gameState.reloadTimer <= 0 && gameState.ammo >= totalLocks) {
                     fireMissiles();
-                } else if (totalLocks >= gameState.maxLocks && gameState.reloadTimer <= 0 && gameState.ammo < gameState.maxLocks && Math.random() < 0.05) {
+                } else if ((totalLocks >= gameState.maxLocks || isSaturated) && gameState.reloadTimer <= 0 && gameState.ammo < totalLocks && Math.random() < 0.05) {
                     addMessage("> CRITICAL: Out of Ammo. COLLECT DATA CORES!", "#f00");
                 }
             }
@@ -1011,36 +1026,28 @@
                 });
             }
             
-            // Player Movement (Input based)
+            // --- Player Movement (360 degrees) ---
+            let moveSpeed = 1000 * (player.dashTimer > 0 ? 3.5 : 1.5); // Boosted base speed 1.5x
             let mx = 0, mz = 0;
-            if (keys.a) mx -= 1;
-            if (keys.d) mx += 1;
             if (keys.w) mz += 1;
             if (keys.s) mz -= 1;
-            
-            if (joyInput.x !== 0 || joyInput.y !== 0) {
-                mx += joyInput.x;
-                mz -= joyInput.y; // joy down = positive Y, world backward = negative Z
+            if (keys.a) mx -= 1;
+            if (keys.d) mx += 1;
+
+            if (mx !== 0 || mz !== 0) {
+                let mag = Math.hypot(mx, mz);
+                tryMove(player, (mx/mag) * moveSpeed * dt, (mz/mag) * moveSpeed * dt);
             }
-
-            // Normalize
-                if (mx !== 0 && mz !== 0) {
-                    let len = Math.hypot(mx, mz);
-                    mx /= len; mz /= len;
-                }
-
-                // Dash Logic
-                if (keys[' '] && player.dashCooldown <= 0) {
-                    // Base cooldown is 1.0s, reduced by 0.05s per level (cap at 0.4s)
-                    let dashBaseCD = Math.max(0.4, 1.0 - (gameState.level - 1) * 0.05);
-                    player.dashCooldown = dashBaseCD;
-                    player.dashTimer = 0.2;
-                    sfxDash();
-                    createExplosion(player.x, player.y, player.z, 0.5, '#0ff');
-                }
-
-                let speed = player.dashTimer > 0 ? 1800 : 700;
-            tryMove(player, mx * speed * dt, mz * speed * dt);
+            
+            // Dash Logic (Key or Button)
+            if ((keys[' '] || player.dashRequested) && player.dashCooldown <= 0) {
+                player.dashRequested = false; 
+                let dashBaseCD = Math.max(0.4, 1.0 - (gameState.level - 1) * 0.05);
+                player.dashCooldown = dashBaseCD;
+                player.dashTimer = 0.2;
+                sfxFire(); // Use existing fire as placeholder for dash sfx
+                createExplosion(player.x, player.y, player.z, 0.5, '#0ff');
+            }
 
             // 360-degree Top-Down bounds
             // No strict clamping; open world map.
@@ -1127,50 +1134,104 @@
                     // --- HEX-CORE BOSS AI ---
                     let len = Math.max(1, distToPlayer);
                     
-                    // Stay at range, but move if too close
-                    if (distToPlayer > 3500) {
-                        tryMove(e, (dxP/len) * e.speed * dt, (dzP/len) * e.speed * dt);
-                    } else if (distToPlayer < 1200) {
-                        tryMove(e, (-dxP/len) * e.speed * dt * 2, (-dzP/len) * e.speed * dt * 2);
+                    // Slow Pursuit Pursuit: Boss slowly follows the player to enable luring tactics
+                    let pursuitSpeed = e.speed * 1.5; // Slightly faster follow
+                    if (distToPlayer > 1000) {
+                        tryMove(e, (dxP/len) * pursuitSpeed * dt, (dzP/len) * pursuitSpeed * dt);
+                    } else if (distToPlayer < 600) {
+                        // Maintain some distance if too close
+                        tryMove(e, (-dxP/len) * pursuitSpeed * dt, (-dzP/len) * pursuitSpeed * dt);
                     }
 
                     e.stateTimer -= dt;
                     if (e.stateTimer <= 0) {
-                        let escorts = enemies.filter(other => other.type === 'escort' && other.squadId === e.bossId).length;
+                        let activeLaunchers = enemies.filter(other => other.type === 'launcher' && other.squadId === e.bossId).length;
                         
-                        // Alternate between Barrage and Targeted Needle shots
-                        if (distToPlayer > 2000) {
-                            // Long Range: Plasma Barrage (Homing spheres)
+                        if (activeLaunchers === 0) {
+                            // SILENCED STATE: Only slow emergency defense shots
                             sfxFire();
-                            let missileCount = 3 + escorts;
+                            let shootDist = Math.max(1, distToPlayer);
+                            enemyProjectiles.push({
+                                x: e.x, y: e.y + 50, z: e.z,
+                                vx: (dxP/shootDist) * 400, vy: 0, vz: (dzP/shootDist) * 400,
+                                time: 0, maxTime: 5
+                            });
+                            e.stateTimer = 4.0;
+                        } else if (distToPlayer > 2000) {
+                            // Long Range: Plasma Barrage
+                            sfxFire();
+                            let missileCount = Math.floor(activeLaunchers * 1.5); // Scaled to launchers
+                            let spiralOffset = performance.now() * 0.002;
                             for (let k = 0; k < missileCount; k++) {
-                                let mAng = (k / missileCount) * Math.PI * 2 + performance.now()*0.001;
+                                let mAng = (k / missileCount) * Math.PI * 2 + spiralOffset;
+                                let shootDist = Math.max(1, distToPlayer);
                                 enemyProjectiles.push({
-                                    x: e.x + Math.cos(mAng) * 200, y: e.y + 100, z: e.z + Math.sin(mAng) * 200,
-                                    vx: (dxP/distToPlayer) * 600 + (Math.random()-0.5)*300, 
-                                    vy: 300 + Math.random()*200, 
-                                    vz: (dzP/distToPlayer) * 600 + (Math.random()-0.5)*300,
-                                    time: 0,
-                                    maxTime: 12.0,
-                                    isPlasma: true // Flag for homing logic if we had it, or just for visuals
+                                    x: e.x + Math.cos(mAng) * 250, y: e.y + 120, z: e.z + Math.sin(mAng) * 250,
+                                    vx: (dxP/shootDist) * 700 + Math.cos(mAng)*300, 
+                                    vy: 350 + Math.random()*250, 
+                                    vz: (dzP/shootDist) * 700 + Math.sin(mAng)*300,
+                                    time: 0, maxTime: 14.0, isPlasma: true
                                 });
                             }
-                            e.stateTimer = 3.0 + (6 - escorts) * 0.5;
+                            e.stateTimer = 2.0 + (6 - activeLaunchers) * 0.5;
                         } else {
-                            // Close Range: Needle Spread (Rapid fire)
+                            // Close Range: Needle Spread
                             sfxFire();
-                            for(let j=0; j<8; j++) {
-                                let ang = (j/8) * Math.PI*2;
+                            let shootDist = Math.max(1, distToPlayer);
+                            let count = activeLaunchers * 2; // Scaled to launchers
+                            for(let j=0; j<count; j++) {
+                                let ang = (j/count) * Math.PI*2 + (Math.random()-0.5)*0.5;
                                 enemyProjectiles.push({
                                     x: e.x, y: e.y + 50, z: e.z,
-                                    vx: (dxP/distToPlayer) * 1000 + Math.cos(ang)*200,
-                                    vy: (player.y - e.y)/distToPlayer * 1000 + (Math.random()-0.5)*200,
-                                    vz: (dzP/distToPlayer) * 1000 + Math.sin(ang)*200,
+                                    vx: (dxP/shootDist) * 1100 + Math.cos(ang)*400,
+                                    vy: (player.y - e.y)/shootDist * 1100 + (Math.random()-0.5)*300,
+                                    vz: (dzP/shootDist) * 1100 + Math.sin(ang)*400,
                                     time: 0, maxTime: 5
                                 });
                             }
-                            e.stateTimer = 1.5;
+                            e.stateTimer = 1.0 + (6 - activeLaunchers) * 0.2;
                         }
+                    }
+                } else if (e.type === 'interceptor') {
+                    // New Interceptor AI: High speed approach, flee when low health
+                    let len = Math.max(1, distToPlayer);
+                    if (e.hp <= 2) {
+                        // FLEEING STATE
+                        e.speed = 600 + (gameState.level * 25); // Faster when fleeing
+                        tryMove(e, (-dxP/len) * e.speed * dt, (-dzP/len) * e.speed * dt);
+                        if (Math.random() < 0.1) {
+                            particles.push({
+                                x: e.x, y: e.y, z: e.z, vx: 0, vy: 50, vz: 0,
+                                time: 0.3, maxTime: 0.3, color: '#ff8', size: 20
+                            });
+                        }
+                    } else if (distToPlayer > 600) {
+                        tryMove(e, (dxP/len) * e.speed * dt, (dzP/len) * e.speed * dt);
+                    } else {
+                        // strafe
+                        tryMove(e, (dzP/len) * e.speed * dt, (-dxP/len) * e.speed * dt);
+                        e.stateTimer -= dt;
+                        if (e.stateTimer <= 0) {
+                            sfxFire();
+                            enemyProjectiles.push({
+                                x: e.x, y: e.y, z: e.z, vx: (dxP/len)*1100, vy: 0, vz: (dzP/len)*1100, time: 0
+                            });
+                            e.stateTimer = 1.0;
+                        }
+                    }
+                } else if (e.type === 'launcher') {
+                    // Core Launchers orbit the boss
+                    let boss = enemies.find(b => b.isBoss && b.bossId === e.squadId);
+                    if (boss) {
+                        e.orbitAngle += dt * 0.6; // Speed of rotation around boss
+                        let targetX = boss.x + Math.cos(e.orbitAngle) * 400;
+                        let targetZ = boss.z + Math.sin(e.orbitAngle) * 400;
+                        e.x += (targetX - e.x) * dt * 3;
+                        e.z += (targetZ - e.z) * dt * 3;
+                        e.y = boss.y + 80;
+                    } else {
+                        // Boss is gone; these self-destruct or flee
+                        e.hp = 0;
                     }
                 } else if (e.type === 'escort') {
                     // Escort drones orbit the boss or intercept player if close
@@ -1305,13 +1366,21 @@
                 // collision with player (physical body ram)
                 if (distToPlayer < e.radius + player.radius) {
                     if (player.dashTimer <= 0) {
-                        gameState.playerHP -= 20;
+                        gameState.playerHP -= e.isBoss ? 40 : 20;
                         updateHP();
                         shakeCamera(0.5, 20);
                     }
-                    createExplosion(e.x, e.y, e.z);
-                    enemies.splice(i, 1);
-                    continue;
+                    if (e.isBoss) {
+                        // Boss takes minor contact damage instead of instant death
+                        e.hp -= 10;
+                        // Push player back
+                        let pushDist = Math.max(1, distToPlayer);
+                        tryMove(player, (dxP/pushDist) * -300, (dzP/pushDist) * -300);
+                    } else {
+                        createExplosion(e.x, e.y, e.z);
+                        enemies.splice(i, 1);
+                        continue;
+                    }
                 }
 
                 let distCam = Math.hypot(e.x - world.camera.x, e.z - world.camera.z);
@@ -1391,7 +1460,7 @@
                     
                     // Missile Interception removed as per user request (was making hits too difficult)
                     
-                    if (dist < 80) { // hit radius
+                    if (dist < (m.tObj.radius || 25) + 20) { // hit radius tuned to target size
                         // Mechanics Update: Height Advantage Damage Calculation
                         let heightDiff = Math.max(0, m.startY - m.tObj.y);
                         let damage = 1;
@@ -1728,7 +1797,7 @@
 
             if (en.isBoss) {
                 // --- HEX-CORE OBLITERATOR BOSS VISUALS ---
-                let escorts = enemies.filter(other => other.type === 'escort' && other.squadId === en.bossId).length;
+                let activeLaunchers = enemies.filter(other => other.type === 'launcher' && other.squadId === en.bossId).length;
                 let corePulse = 0.8 + 0.2 * Math.sin(performance.now() * 0.005);
                 
                 // Central Core
@@ -1754,8 +1823,8 @@
                     ctx.rotate(ang + Math.PI/2);
                     
                     // Plate Shape (Hexagonal)
-                    ctx.fillStyle = (i < escorts) ? '#222' : '#111';
-                    ctx.strokeStyle = (i < escorts) ? '#0df' : '#444';
+                    ctx.fillStyle = (i < activeLaunchers) ? '#222' : '#111';
+                    ctx.strokeStyle = (i < activeLaunchers) ? '#0df' : '#444';
                     ctx.lineWidth = 3;
                     ctx.beginPath();
                     for(let k=0; k<6; k++) {
@@ -1788,6 +1857,59 @@
                 ctx.fillStyle = 'rgba(255,0,0,0.3)'; ctx.fillRect(-s*2, -s*3.5, s*4, 15);
                 ctx.fillStyle = '#f00'; ctx.fillRect(-s*2, -s*3.5, s*4 * hpRatio, 15);
                 ctx.strokeStyle = '#fff'; ctx.strokeRect(-s*2, -s*3.5, s*4, 15);
+
+                // VIEW-FINDER ON BOSS
+                if (en.locks > 0) {
+                    let isMax = en.locks >= 15;
+                    ctx.save();
+                    ctx.strokeStyle = isMax ? '#f00' : '#0ff';
+                    ctx.lineWidth = isMax ? 6 : 2;
+                    let b = s * (isMax ? 2.5 : 2.0);
+                    
+                    // Rotating outer frame
+                    ctx.rotate(performance.now() * 0.002);
+                    ctx.strokeRect(-b, -b, b*2, b*2);
+                    
+                    if (isMax) {
+                        // Diagonals for MAX LOCK
+                        ctx.beginPath();
+                        ctx.moveTo(-b, -b); ctx.lineTo(b, b);
+                        ctx.moveTo(b, -b); ctx.lineTo(-b, b);
+                        ctx.stroke();
+                    }
+                    ctx.restore();
+                }
+
+                ctx.restore();
+                return;
+            }
+
+            if (en.type === 'launcher') {
+                // Core Launcher Visuals (Hexagonal energy pods)
+                let sL = s * 0.8;
+                ctx.fillStyle = '#111'; ctx.strokeStyle = '#0ff'; ctx.lineWidth = 3;
+                ctx.beginPath();
+                for(let k=0; k<6; k++) {
+                    let a = (k/6)*Math.PI*2;
+                    ctx.lineTo(Math.cos(a)*sL, Math.sin(a)*sL);
+                }
+                ctx.closePath(); ctx.fill(); ctx.stroke();
+                // Core glow
+                ctx.fillStyle = '#0ff'; ctx.globalAlpha = 0.5 + Math.sin(performance.now()*0.01)*0.3;
+                ctx.beginPath(); ctx.arc(0,0, sL*0.4, 0, Math.PI*2); ctx.fill();
+                ctx.globalAlpha = 1.0;
+                ctx.restore();
+                return;
+            }
+
+            if (en.type === 'interceptor') {
+                // Interceptor Visuals (Sleek red dart)
+                let sI = s * 1.2;
+                ctx.fillStyle = '#300'; ctx.strokeStyle = '#f22'; ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(0, -sI); ctx.lineTo(sI*0.5, sI*0.8); ctx.lineTo(0, sI*0.4); ctx.lineTo(-sI*0.5, sI*0.8);
+                ctx.closePath(); ctx.fill(); ctx.stroke();
+                ctx.fillStyle = '#f22'; ctx.beginPath(); ctx.arc(0, 0, sI*0.2, 0, Math.PI*2); ctx.fill();
                 ctx.restore();
                 return;
             }
