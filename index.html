@@ -87,6 +87,24 @@
             box-shadow: 0 0 10px #0df;
             transition: width 0.2s;
         }
+        #ammo-bar-bg {
+            position: absolute;
+            top: 76px; left: 20px;
+            width: 250px; height: 12px;
+            border: 2px solid #f80;
+            background: rgba(255, 136, 0, 0.1);
+        }
+        #ammo-bar {
+            width: 100%; height: 100%;
+            background: #f80;
+            box-shadow: 0 0 10px #f80;
+            transition: width 0.2s;
+        }
+        #ammo-alert {
+            position: absolute; top: -1px; left: 0; width: 100%; height: 100%;
+            text-align: center; color: #fff; font-size: 10px; font-weight: bold; line-height: 14px;
+            pointer-events: none; text-shadow: 0 0 3px #000;
+        }
         #gameover {
             display: none;
             position: absolute; top: 0; left: 0;
@@ -187,17 +205,21 @@
     <div id="ui">
         <div id="score-board">
              SCORE: <span id="scoreVal">0</span><br>
-            <span style="font-size:16px; color:#aaa;">LV <span id="levelVal">1</span> (MAX LOCKS: <span id="maxLockVal">3</span>)</span><br>
+            <span style="font-size:16px; color:#aaa;">LV <span id="levelVal">1</span> (MAX LOCKS: <span id="maxLockVal">10</span>)</span><br>
             <span style="font-size:14px; color:#ffaa00;">BEST: <span id="bestScoreVal">0</span></span>
         </div>
         <div id="hp-bar-bg"><div id="hp-bar"></div></div>
+        <div id="ammo-bar-bg">
+            <div id="ammo-bar"></div>
+            <div id="ammo-alert"></div>
+        </div>
         <div class="instruction">
             [WASD / ARROWS / TOUCH] Move<br>
             Auto-Lock & Auto-Fire <br>
             Auto-Evasion
         </div>
         
-        <div id="joystick-area" style="position: absolute; top:0; left:0; width:50%; height:100%; pointer-events:auto;">
+        <div id="joystick-area" style="position: absolute; top:0; left:0; width:100%; height:100%; pointer-events:auto;">
             <div id="joystick-base" style="display:none;"><div id="joystick-stick"></div></div>
         </div>
         <div class="combo-text" id="comboText">COMBO!</div>
@@ -218,11 +240,17 @@
     <script>
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d', { alpha: false });
+        
+        const fogCanvas = document.createElement('canvas');
+        const fogCtx = fogCanvas.getContext('2d', { alpha: true });
+        
         let width, height;
 
         function resize() {
             width = canvas.width = window.innerWidth;
             height = canvas.height = window.innerHeight;
+            fogCanvas.width = width;
+            fogCanvas.height = height;
         }
         window.addEventListener('resize', resize);
         resize();
@@ -238,10 +266,14 @@
             playerHP: 100,
             level: 1,
             exp: 0,
-            maxLocks: 3,
+            maxLocks: 10,
             bossActive: false,
             isOver: false,
-            lastTime: performance.now()
+            lastTime: performance.now(),
+            ammo: 100, // Boosted starting ammo
+            reloadTimer: 0,
+            totalFiredSinceReload: 0,
+            resourceSpawnTimer: 0
         };
         
         document.getElementById('bestScoreVal').innerText = gameState.highScore;
@@ -258,12 +290,20 @@
         let enemyProjectiles = [];
         let particles = [];
         let dataCores = [];
+        let resources = [];
         let screenShake = { x: 0, y: 0, time: 0, intensity: 0 };
         
         let comboTimer = 0;
         let comboCount = 0;
         
         let radarAngle = 0;
+        
+        // UI Messages Log
+        let uiMessages = [];
+        function addMessage(text, color = '#fff') {
+            uiMessages.push({ text, color, time: 3.0 });
+            if (uiMessages.length > 5) uiMessages.shift(); // Max 5 messages visible
+        }
 
         // ---- Audio System (Web Audio API) ----
         let actx = null;
@@ -477,7 +517,7 @@
             gameState.playerHP = 100;
             gameState.level = 1;
             gameState.exp = 0;
-            gameState.maxLocks = 3;
+            gameState.maxLocks = 10;
             gameState.isOver = false;
             comboCount = 0;
             document.getElementById('scoreVal').innerText = '0';
@@ -493,6 +533,16 @@
             missiles = [];
             enemyProjectiles = [];
             particles = [];
+            resources = [];
+            dataCores = [];
+            
+            gameState.ammo = 100;
+            gameState.reloadTimer = 0;
+            gameState.totalFiredSinceReload = 0;
+            gameState.resourceSpawnTimer = 0;
+            uiMessages = [];
+            updateAmmoBar();
+            
             initTerrain();
             gameState.lastTime = performance.now();
             requestAnimationFrame(gameLoop);
@@ -503,7 +553,7 @@
         function updateHP() {
             document.getElementById('hp-bar').style.width = Math.max(0, gameState.playerHP) + '%';
             if (gameState.playerHP <= 0 && !gameState.isOver) {
-                gameState.isOver = true;
+                gameState.isOver = true; // Check if dead
                 
                 if (gameState.score > gameState.highScore) {
                     gameState.highScore = gameState.score;
@@ -531,6 +581,12 @@
             }
         }
 
+        function updateAmmoBar() {
+            let maxCapacity = 100 + (gameState.level - 1) * 50; 
+            let pct = Math.max(0, Math.min(100, (gameState.ammo / maxCapacity) * 100));
+            document.getElementById('ammo-bar').style.width = pct + '%';
+        }
+
         function project(x, y, z) {
             let cx = x - world.camera.x;
             let cy = y - world.camera.y; 
@@ -555,7 +611,15 @@
         }
 
         function fireMissiles() {
+            if (gameState.reloadTimer > 0) return; // Cannot fire while reloading
+            if (gameState.ammo < gameState.maxLocks) return; // Not enough ammo to fire a full barrage
+            
             let targets = enemies.filter(e => e.locks > 0);
+            if (targets.length === 0) return;
+
+            sfxFire(); // Play one loud sound for barrage
+            
+            let missilesFired = 0;
             for (let t of targets) {
                 let lockCount = t.locks;
                 if (lockCount === 0) continue;
@@ -564,29 +628,46 @@
                 t.targeted = true;
                 
                 for (let i = 0; i < lockCount; i++) {
-                    let dObj = drones[i % drones.length];
-                    setTimeout(() => {
-                        sfxFire();
-                        // Phase 10: Close-range missile penalty (measured from player, Phase 11)
-                        const MIN_ENGAGE_DISTANCE = 300;
-                        let distToTarget = Math.hypot(t.x - player.x, t.z - player.z);
-                        let closePenalty = Math.max(0, (MIN_ENGAGE_DISTANCE - distToTarget) / MIN_ENGAGE_DISTANCE);
-                        let veerX = closePenalty * (Math.random() - 0.5) * 3000;
-                        let veerZ = closePenalty * (Math.random() - 0.5) * 3000;
-                        missiles.push({
-                            x: player.x, // Phase 11: Fire from player ship
-                            y: player.y,
-                            z: player.z,
-                            startY: player.y, // Phase 9: altitude for height-damage scaling
-                            vx: (Math.random() - 0.5) * 800 + veerX,
-                            vy: 800 + Math.random() * 400,
-                            vz: (Math.random() - 0.5) * 800 + veerZ,
-                            tObj: t,
-                            time: 0,
-                            type: Math.floor(Math.random() * 3),
-                            trail: []
-                        });
-                    }, i * 150);
+                    const MIN_ENGAGE_DISTANCE = 300;
+                    let distToTarget = Math.hypot(t.x - player.x, t.z - player.z);
+                    let closePenalty = Math.max(0, (MIN_ENGAGE_DISTANCE - distToTarget) / MIN_ENGAGE_DISTANCE);
+                    let veerX = closePenalty * (Math.random() - 0.5) * 3000;
+                    let veerZ = closePenalty * (Math.random() - 0.5) * 3000;
+                    let outX = (Math.random() - 0.5) * 800; // Barrage spread
+                    let outZ = (Math.random() - 0.5) * 800;
+                    missiles.push({
+                        x: player.x,
+                        y: player.y + 10,
+                        z: player.z,
+                        startY: player.y + 10,
+                        vx: outX + veerX,
+                        vy: 600 + Math.random() * 600,
+                        vz: outZ + veerZ,
+                        tObj: t,
+                        time: 0,
+                        type: Math.floor(Math.random() * 3),
+                        trail: []
+                    });
+                    missilesFired++;
+                }
+            }
+            
+            // Ammo and Reload logic
+            if (missilesFired > 0) {
+                let prevAmmo = gameState.ammo;
+                gameState.ammo -= missilesFired;
+                updateAmmoBar();
+                gameState.totalFiredSinceReload += missilesFired;
+                
+                // Force a reload after every 20 shots
+                if (gameState.totalFiredSinceReload >= 20) {
+                    gameState.reloadTimer = 3.0;
+                    gameState.totalFiredSinceReload = 0; // reset for next magazine
+                    addMessage("> Warning: Reloading Magazine...", "#f80");
+                }
+                
+                if (gameState.ammo < 10 && prevAmmo >= 10) {
+                    addMessage("> CRITICAL: Out of Ammo", "#f00");
                 }
             }
         }
@@ -597,9 +678,12 @@
             if (gameState.exp >= reqExp) {
                 gameState.exp -= reqExp;
                 gameState.level++;
-                gameState.maxLocks = 3 + Math.floor((gameState.level - 1) / 2); // gets 1 more max lock every 2 levels
                 document.getElementById('levelVal').innerText = gameState.level;
-                document.getElementById('maxLockVal').innerText = gameState.maxLocks;
+                
+                // Increase ammo limit by 50 and refill ammo
+                gameState.ammo += 50;
+                updateAmmoBar();
+                addMessage(`> Level Up! Ammo Capacity Expanded (+50)`, "#0f0");
                 
                 sfxLevelUp();
                 // level up flash
@@ -611,6 +695,12 @@
             if (!actx) return;
             playTone(150, 'sawtooth', 2.0, 0.4);
             setTimeout(() => playTone(120, 'sawtooth', 2.0, 0.4), 500);
+        }
+
+        function sfxCollect() {
+            if (!actx) return;
+            playTone(800, 'sine', 0.1, 0.1);
+            setTimeout(() => playTone(1200, 'sine', 0.15, 0.1), 50);
         }
 
         function spawnEnemy() {
@@ -638,24 +728,29 @@
                 return;
             }
 
-            let q = Math.floor(Math.random() * (1 + Math.min(10, gameState.level * 0.5))) + 1;
-            for(let i=0; i<q; i++) {
-                let ang = Math.random() * Math.PI * 2;
-                let dist = 1400 + Math.random() * 400;
-                enemies.push({
-                    x: player.x + Math.cos(ang) * dist,
-                    y: 0, 
-                    z: player.z + Math.sin(ang) * dist,
-                    radius: 10,
-                    hp: 1, maxHp: 1,
-                    locks: 0, targeted: false,
-                    speed: 300 + (gameState.level * 30) + Math.random() * 200,
-                    hoverTime: Math.random() * 10,
-                    state: 'approach', 
-                    stateTimer: 0,
-                    isBoss: false,
-                    dashCooldown: 0 // Phase 10: Dash evasion cooldown
-                });
+            // Squad Spawn (Missiler, Gunner, Patrol)
+            // Squad Spawn (1 Missiler, 3 Gunners, 3 Patrols)
+            let ang = Math.random() * Math.PI * 2;
+            let dist = 1400 + Math.random() * 400;
+            let cx = player.x + Math.cos(ang) * dist;
+            let cz = player.z + Math.sin(ang) * dist;
+            let squadId = performance.now(); // unique ID
+            
+            // Missiler (Hardest) x 1
+            enemies.push({ x: cx, y: 0, z: cz, radius: 18, hp: 5, maxHp: 5, locks: 0, targeted: false, speed: 200 + (gameState.level * 15), hoverTime: Math.random() * 10, state: 'approach', stateTimer: 0, isBoss: false, type: 'missiler', dashCooldown: 0, interceptCooldown: 0, squadId: squadId });
+            
+            // Gunners (Medium) x 3
+            for(let i=0; i<3; i++) {
+                let offX = (Math.random() - 0.5) * 200;
+                let offZ = (Math.random() - 0.5) * 200;
+                enemies.push({ x: cx + offX, y: 0, z: cz + offZ, radius: 12, hp: 1, maxHp: 1, locks: 0, targeted: false, speed: 280 + (gameState.level * 20), hoverTime: Math.random() * 10, state: 'approach', stateTimer: 0, isBoss: false, type: 'gunner', dashCooldown: 0, interceptCooldown: 0, squadId: squadId });
+            }
+            
+            // Patrols (Weak) x 3
+            for(let i=0; i<3; i++) {
+                let offX = (Math.random() - 0.5) * 300;
+                let offZ = (Math.random() - 0.5) * 300;
+                enemies.push({ x: cx + offX, y: 0, z: cz + offZ, radius: 10, hp: 1, maxHp: 1, locks: 0, targeted: false, speed: 320 + (gameState.level * 20), hoverTime: Math.random() * 10, state: 'approach', stateTimer: 0, isBoss: false, type: 'patrol', dashCooldown: 0, interceptCooldown: 0, squadId: squadId });
             }
         }
 
@@ -729,12 +824,16 @@
                     });
                 }
                 
-                // Auto Fire condition
+                // Auto Fire condition (Only if not reloading AND have ammo)
                 totalLocks = enemies.reduce((sum, e) => sum + e.locks, 0);
-                let lockableLeft = validTargets.length > 0;
-                if (totalLocks > 0 && (totalLocks >= gameState.maxLocks || !lockableLeft)) {
+                if (totalLocks >= gameState.maxLocks && gameState.reloadTimer <= 0 && gameState.ammo >= gameState.maxLocks) {
                     fireMissiles();
                 }
+            }
+            
+            // Reload logic
+            if (gameState.reloadTimer > 0) {
+                gameState.reloadTimer -= dt;
             }
 
             // Dash status
@@ -772,8 +871,10 @@
                 }
             }
 
-            // Data Cores (Magnet + Collection)
+            // Data Cores & Resources (Magnet + Collection)
             let magnetRadius = 400 + (gameState.level * 10); // Magnet grows with level
+            
+            // Process Data Cores (EXP)
             for (let i = dataCores.length - 1; i >= 0; i--) {
                 let c = dataCores[i];
                 let dist = Math.hypot(c.x - player.x, c.y - player.y, c.z - player.z);
@@ -782,32 +883,21 @@
                 if (c.lifetime !== undefined) {
                     c.lifetime -= dt;
                     if (c.lifetime <= 0) {
-                        // Poof — no score or exp
-                        particles.push({
-                            x: c.x, y: c.y, z: c.z, vx: 0, vy: 50, vz: 0,
-                            time: 0.4, maxTime: 0.4, color: 'rgba(255,100,0,0.5)', size: 20
-                        });
                         dataCores.splice(i, 1);
                         continue;
                     }
                 }
 
-                c.y += Math.sin(performance.now() * 0.01 + c.x) * 0.5; // Hover
-
-                if (dist < magnetRadius) {
-                    // Pull towards player
-                    c.x += (player.x - c.x) * 4 * dt;
-                    c.y += (player.y - c.y) * 4 * dt;
-                    c.z += (player.z - c.z) * 4 * dt;
+                if (dist < magnetRadius && c.time > 0.5) {
+                    let spd = 1200 * dt;
+                    c.x += (player.x - c.x) / dist * spd;
+                    c.y += (player.y - c.y) / dist * spd;
+                    c.z += (player.z - c.z) / dist * spd;
                 }
-
+                
                 if (dist < player.radius + 15) {
-                    // Collected!
-                    let val = c.isBossObj ? 500 : 50;
-                    gameState.score += val;
-                    addExp(val);
-                    document.getElementById('scoreVal').innerText = gameState.score;
-                    playTone(1200, 'sine', 0.05, 0.05); // Ping sound
+                    addExp(20);
+                    sfxCollect();
                     particles.push({
                         x: player.x, y: player.y, z: player.z, vx: 0, vy: 0, vz: 0,
                         time: 0.1, maxTime: 0.1, color: '#ffea00', size: 40, isRing: true
@@ -819,6 +909,67 @@
                 if (c.z < world.camera.z) {
                     dataCores.splice(i, 1);
                 }
+            }
+            
+            // Process Resources (Ammo)
+            for (let i = resources.length - 1; i >= 0; i--) {
+                let r = resources[i];
+                let dist = Math.hypot(r.x - player.x, r.y - player.y, r.z - player.z);
+                
+                r.age += dt;
+                if (r.age > 30.0) { // Despawn after 30s
+                    resources.splice(i, 1);
+                    continue;
+                }
+                
+                // Auto-collect range is smaller than EXP cores to require deliberate pickup
+                let collectRange = 400; // GREATLY increased magnetic pull distance
+                if (dist < collectRange) {
+                    let spd = 2000 * dt; // Much faster magnetic pull
+                    r.x += (player.x - r.x) / dist * spd;
+                    r.y += (player.y - r.y) / dist * spd;
+                    r.z += (player.z - r.z) / dist * spd;
+                }
+                
+                // Increased collection hit radius
+                if (dist < player.radius + 60) {
+                    // Refill ammo (+50 per resource)
+                    let maxAmmo = 100 + (gameState.level - 1) * 50; 
+                    let added = Math.min(50, maxAmmo - gameState.ammo);
+                    gameState.ammo = Math.min(gameState.ammo + 50, maxAmmo);
+                    updateAmmoBar();
+                    
+                    if (added > 0) {
+                        addMessage(`> Ammo Replenished (+${added})`, "#0f0");
+                    }
+                    
+                    sfxCollect(); // Play sound
+                    // Collection flash
+                    particles.push({
+                        x: player.x, y: player.y, z: player.z, vx: 0, vy: 0, vz: 0,
+                        time: 0.1, maxTime: 0.1, color: '#f80', size: 100, isRing: true
+                    });
+                    
+                    resources.splice(i, 1);
+                }
+            }
+            
+            // Random Map Resource Spawning
+            gameState.resourceSpawnTimer += dt;
+            if (gameState.resourceSpawnTimer > 4.0 && resources.length < 15) {
+                gameState.resourceSpawnTimer = 0;
+                let angle = Math.random() * Math.PI * 2;
+                let dist = 800 + Math.random() * 800; // Spawn 800-1600 units away
+                let spawnX = player.x + Math.cos(angle) * dist;
+                let spawnZ = player.z + Math.sin(angle) * dist;
+                resources.push({
+                    x: spawnX,
+                    y: getTerrainHeight(spawnX, spawnZ) + 15, // Spawn directly on the ground, slightly elevated
+                    z: spawnZ,
+                    vx: 0, vy: 0, vz: 0,
+                    time: 0,
+                    age: 0 // Used for 30s despawn
+                });
             }
             
             // Player Movement (Input based)
@@ -848,13 +999,13 @@
             // Hover strictly over terrain
             player.y = getTerrainHeight(player.x, player.z) + Math.sin(performance.now() * 0.005) * 10 + 20;
 
-            // Drone AI companion movement (3-way separated tethered seek)
             let tN = performance.now();
+            // Drone AI companion movement (3-way separated tethered seek)
             drones.forEach((d, idx) => {
                 let angleOffset = idx * (Math.PI * 2 / 3);
                 
                 // Base formation anchor (orbiting the player, 2x further distance)
-                let distBase = 350;
+                let distBase = 750;
                 let anchorX = player.x + Math.cos(tN * 0.0003 + angleOffset) * distBase;
                 let anchorZ = player.z - 100 + Math.sin(tN * 0.0003 + angleOffset) * distBase;
                 
@@ -863,8 +1014,8 @@
                 let targetE = null;
                 for (let e of enemies) {
                     let dSq = (e.x - anchorX)**2 + (e.z - anchorZ)**2;
-                    // Only target if within its 1000-unit operational sector
-                    if (dSq < nearestSq && dSq < 1000 * 1000) {
+                    // Only target if within its 2700-unit operational sector
+                    if (dSq < nearestSq && dSq < 2700 * 2700) {
                         nearestSq = dSq;
                         targetE = e;
                     }
@@ -879,7 +1030,7 @@
                     let tx = targetE.x - anchorX;
                     let tz = targetE.z - 50 - anchorZ;
                     let tLen = Math.hypot(tx, tz);
-                    const MAX_REACH = 600;
+                    const MAX_REACH = 1800;
                     if (tLen > MAX_REACH) {
                         tx = (tx / tLen) * MAX_REACH;
                         tz = (tz / tLen) * MAX_REACH;
@@ -902,16 +1053,21 @@
             world.camera.x += (player.x - world.camera.x) * dt * 4;
             world.camera.z += (player.z - 700 - world.camera.z) * dt * 4;
 
-            // Enemies
-            let maxEnemies = 3 + Math.floor(gameState.level * 0.9);
-            let spawnChance = 0.018 + (gameState.level * 0.009);
+            // Enemies overall cap (reduced to combat clutter since 1 squad = 7 mobs)
+            let maxEnemies = 14 + Math.floor(gameState.level * 2);
+            let spawnChance = 0.05 + (gameState.level * 0.02);
             if (enemies.length < maxEnemies && Math.random() < spawnChance) spawnEnemy();
+
+            let patrolAlive = enemies.some(e => !e.isBoss && e.type === 'patrol');
+            let baseEngageDist = patrolAlive ? 1200 : 700;
+            let missilerAmmo = patrolAlive ? 4 : 2;
 
             for (let i = enemies.length - 1; i >= 0; i--) {
                 let e = enemies[i];
                 e.hoverTime += dt * 5;
                 e.y = getTerrainHeight(e.x, e.z) + 10 + Math.sin(e.hoverTime) * 15; // hover over terrain
                 if (e.dashCooldown > 0) e.dashCooldown -= dt; // Phase 10: Tick down dash cooldown
+                if (e.interceptCooldown > 0) e.interceptCooldown -= dt; // Missile interception cooldown
                 
                 // State machine
                 let dxP = player.x - e.x;
@@ -923,7 +1079,8 @@
                     let len = Math.max(1, distToPlayer);
                     tryMove(e, (dxP/len) * e.speed * dt, (dzP/len) * e.speed * dt);
                     
-                    if (distToPlayer < (e.isBoss ? 900 : 700)) {
+                    let engageDist = e.isBoss ? 900 : (e.type === 'missiler' ? baseEngageDist : 600);
+                    if (distToPlayer < engageDist) {
                         e.state = 'aim';
                         e.stateTimer = 1.0 + Math.random() * 0.5;
                     }
@@ -960,14 +1117,55 @@
                                 });
                             }
                             e.stateTimer = 4.0;
-                        } else {
-                            // FIRE normal projectile
+                        } else if (e.type === 'missiler') {
+                            let patrolAliveInSquad = enemies.some(other => other.squadId === e.squadId && other.type === 'patrol');
+                            sfxFire();
+                            
+                            if (patrolAliveInSquad) {
+                                // Has patrol support: Heavy Missiles
+                                for(let k=0; k<missilerAmmo; k++) {
+                                    let spreadX = (Math.random() - 0.5) * 400;
+                                    let spreadZ = (Math.random() - 0.5) * 400;
+                                    enemyProjectiles.push({
+                                        x: e.x, y: e.y, z: e.z,
+                                        vx: (dxP/pLen) * 800 + spreadX, vy: (dyP/pLen) * 800 + 400, vz: (dzP/pLen) * 800 + spreadZ,
+                                        time: 0
+                                    });
+                                }
+                            } else {
+                                // No patrols left: Downgrade to standard shots
+                                for(let bang= -1; bang <= 1; bang++) {
+                                    let ang = bang * 0.1;
+                                    let cosA = Math.cos(ang), sinA = Math.sin(ang);
+                                    let vx = (dxP/pLen) * cosA - (dzP/pLen) * sinA;
+                                    let vz = (dxP/pLen) * sinA + (dzP/pLen) * cosA;
+                                    enemyProjectiles.push({
+                                        x: e.x, y: e.y, z: e.z,
+                                        vx: vx * 1000, vy: (dyP/pLen) * 1000, vz: vz * 1000, time: 0
+                                    });
+                                }
+                            }
+                            e.stateTimer = 4.0 + Math.random(); 
+                        } else if (e.type === 'gunner') {
+                            sfxFire();
+                            for(let bang= -1; bang <= 1; bang++) {
+                                let ang = bang * 0.2;
+                                let cosA = Math.cos(ang), sinA = Math.sin(ang);
+                                let vx = (dxP/pLen) * cosA - (dzP/pLen) * sinA;
+                                let vz = (dxP/pLen) * sinA + (dzP/pLen) * cosA;
+                                enemyProjectiles.push({
+                                    x: e.x, y: e.y, z: e.z,
+                                    vx: vx * 1200, vy: (dyP/pLen) * 1200, vz: vz * 1200, time: 0
+                                });
+                            }
+                            e.stateTimer = 2.5 + Math.random(); 
+                        } else if (e.type === 'patrol') {
                             enemyProjectiles.push({
                                 x: e.x, y: e.y, z: e.z,
-                                vx: (dxP/pLen) * 800, vy: (dyP/pLen) * 800, vz: (dzP/pLen) * 800,
+                                vx: (dxP/pLen) * 500, vy: (dyP/pLen) * 500, vz: (dzP/pLen) * 500,
                                 time: 0
                             });
-                            e.stateTimer = 3.0 + Math.random(); 
+                            e.stateTimer = 4.0; 
                         }
                     }
                 } else if (e.state === 'fire') {
@@ -1060,15 +1258,27 @@
                         m.tObj.dashCooldown = 1.5; // 1.5s cooldown
                     }
                     
-                    if (dist < 80) { // hit radius
-                        createExplosion(m.tObj.x, m.tObj.y, m.tObj.z);
+                    // Missile Interception (Enemies shoot down missiles)
+                    if (dist < 400 && m.tObj.interceptCooldown <= 0 && Math.random() < 0.15) {
+                        createExplosion(m.x, m.y, m.z, 0.4, '#aaa'); // Intercept explosion
+                        particles.push({
+                             x: m.tObj.x, y: m.tObj.y, z: m.tObj.z, vx: 0, vy: 0, vz: 0,
+                             time: 0.1, maxTime: 0.1, color: '#ff0', size: 20
+                        }); // Muzzle flash
                         
-                        // Phase 9: Height Advantage Damage Calculation
-                        let heightDiff = m.startY - m.tObj.y;
+                        m.tObj.interceptCooldown = 0.5 + Math.random(); // Cooldown
+                        missiles.splice(i, 1);
+                        continue; // Missile destroyed
+                    }
+                    
+                    if (dist < 80) { // hit radius
+                        // Mechanics Update: Height Advantage Damage Calculation
+                        let heightDiff = Math.max(0, m.startY - m.tObj.y);
                         let damage = 1;
-                        if (heightDiff > 0) {
-                            damage += (heightDiff / 200); // Ex: Firing from 400y to 0y = 1 + 2 = 3 damage
-                        }
+                        let heightBonus = heightDiff / 100; // e.g., 200 height = +2 dmg
+                        damage += heightBonus;
+
+                        createExplosion(m.tObj.x, m.tObj.y, m.tObj.z, 1.0 + (heightBonus * 0.4), heightBonus >= 1.5 ? '#fffaaa' : null);
 
                         m.tObj.hp -= damage;
                         if (m.tObj.hp <= 0) {
@@ -1464,8 +1674,12 @@
                     {x: s*0.9, y: s*0.8, phase: Math.PI*0.33}
                 ];
 
-                let darkColor = en.targeted ? '#800' : '#400';
-                let lightColor = en.targeted ? '#f55' : '#800';
+                let typeColor = en.type === 'missiler' ? {d: '#400', l: '#800', bodyD: '#300', bodyL: '#600', bodyT: '#822'} 
+                              : en.type === 'gunner' ? {d: '#440', l: '#880', bodyD: '#330', bodyL: '#660', bodyT: '#882'}
+                              : {d: '#040', l: '#080', bodyD: '#030', bodyL: '#060', bodyT: '#282'}; // patrol
+
+                let darkColor = en.targeted ? '#800' : typeColor.d;
+                let lightColor = en.targeted ? '#f55' : typeColor.l;
 
                 // Draw back legs
                 for (let i=0; i<6; i++) {
@@ -1485,7 +1699,7 @@
 
                 // Body (Rectangular Prism)
                 // Left Face (Dark)
-                ctx.fillStyle = en.targeted ? '#b00' : '#300';
+                ctx.fillStyle = en.targeted ? '#b00' : typeColor.bodyD;
                 ctx.beginPath();
                 ctx.moveTo(0, -s*1.2);    // top center
                 ctx.lineTo(-s*1.5, -s*0.6); // top left
@@ -1495,7 +1709,7 @@
                 ctx.fill(); ctx.stroke();
 
                 // Right Face (Light)
-                ctx.fillStyle = en.targeted ? '#f55' : '#600';
+                ctx.fillStyle = en.targeted ? '#f55' : typeColor.bodyL;
                 ctx.beginPath();
                 ctx.moveTo(0, -s*1.2);    // top center
                 ctx.lineTo(s*1.5, -s*0.6);  // top right
@@ -1505,7 +1719,7 @@
                 ctx.fill(); ctx.stroke();
 
                 // Top Face (Lighter)
-                ctx.fillStyle = en.targeted ? '#f88' : '#822';
+                ctx.fillStyle = en.targeted ? '#f88' : typeColor.bodyT;
                 ctx.beginPath();
                 ctx.moveTo(0, -s*1.2);    // center
                 ctx.lineTo(-s*1.5, -s*0.6); // bottom left of top face
@@ -1514,19 +1728,84 @@
                 ctx.closePath();
                 ctx.fill(); ctx.stroke();
 
-                // Canon barrel
-                ctx.fillStyle = '#222';
-                ctx.strokeStyle = '#555';
-                ctx.beginPath();
-                ctx.moveTo(-s*0.2, -s*0.7);
-                ctx.lineTo(s*0.2, -s*0.7);
-                ctx.lineTo(s*0.1, -s*1.8);
-                ctx.lineTo(-s*0.1, -s*1.8);
-                ctx.closePath();
-                ctx.fill(); ctx.stroke();
-                
+                // Type-Specific Attachments
+                ctx.lineWidth = 1.5;
+                if (en.type === 'missiler') {
+                    // Missiler: Multiple square pillars (missile pods) on back
+                    let pSize = s * 0.4;
+                    let pHeight = -s * 2.2;
+                    let podColors = ['#111', '#300', '#500'];
+                    // draw 4 pods arranged in 2x2 grid
+                    let offsets = [ 
+                        {x: -s*0.5, y: -s*1.0}, {x: s*0.5, y: -s*1.0},
+                        {x: -s*0.5, y: -s*1.5}, {x: s*0.5, y: -s*1.5}
+                    ];
+                    for (let p of offsets) {
+                        // Pod left face
+                        ctx.fillStyle = podColors[0];
+                        ctx.beginPath();
+                        ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - pSize, p.y + pSize*0.5);
+                        ctx.lineTo(p.x - pSize, pHeight + pSize*0.5); ctx.lineTo(p.x, pHeight);
+                        ctx.fill(); ctx.stroke();
+                        // Pod right face
+                        ctx.fillStyle = podColors[1];
+                        ctx.beginPath();
+                        ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + pSize, p.y + pSize*0.5);
+                        ctx.lineTo(p.x + pSize, pHeight + pSize*0.5); ctx.lineTo(p.x, pHeight);
+                        ctx.fill(); ctx.stroke();
+                        // Pod top face
+                        ctx.fillStyle = podColors[2];
+                        ctx.beginPath();
+                        ctx.moveTo(p.x, pHeight); ctx.lineTo(p.x - pSize, pHeight + pSize*0.5);
+                        ctx.lineTo(p.x, pHeight + pSize); ctx.lineTo(p.x + pSize, pHeight + pSize*0.5);
+                        ctx.fill(); ctx.stroke();
+                    }
+                } else if (en.type === 'gunner') {
+                    // Gunner: One small square pillar (turret core)
+                    let pSize = s * 0.3;
+                    let pHeight = -s * 1.8;
+                    // Left face
+                    ctx.fillStyle = '#120';
+                    ctx.beginPath();
+                    ctx.moveTo(0, -s*1.2); ctx.lineTo(-pSize, -s*1.2 + pSize*0.5);
+                    ctx.lineTo(-pSize, pHeight + pSize*0.5); ctx.lineTo(0, pHeight);
+                    ctx.fill(); ctx.stroke();
+                    // Right face
+                    ctx.fillStyle = '#340';
+                    ctx.beginPath();
+                    ctx.moveTo(0, -s*1.2); ctx.lineTo(pSize, -s*1.2 + pSize*0.5);
+                    ctx.lineTo(pSize, pHeight + pSize*0.5); ctx.lineTo(0, pHeight);
+                    ctx.fill(); ctx.stroke();
+                    // Top face
+                    ctx.fillStyle = '#450';
+                    ctx.beginPath();
+                    ctx.moveTo(0, pHeight); ctx.lineTo(-pSize, pHeight + pSize*0.5);
+                    ctx.lineTo(0, pHeight + pSize); ctx.lineTo(pSize, pHeight + pSize*0.5);
+                    ctx.fill(); ctx.stroke();
+                } else if (en.type === 'patrol') {
+                    // Patrol: Round antenna dish
+                    ctx.fillStyle = '#0a0';
+                    ctx.strokeStyle = '#0f0';
+                    let spin = performance.now() * 0.005;
+                    ctx.save();
+                    ctx.translate(0, -s*1.6);
+                    ctx.rotate(spin);
+                    ctx.beginPath();
+                    ctx.ellipse(0, 0, s*0.8, s*0.3, 0, 0, Math.PI*2);
+                    ctx.fill(); ctx.stroke();
+                    ctx.beginPath();
+                    ctx.arc(0, 0, s*0.2, 0, Math.PI*2);
+                    ctx.fillStyle = '#ff0'; ctx.fill();
+                    ctx.restore();
+                    // Mast
+                    ctx.fillStyle = '#121';
+                    ctx.strokeStyle = '#242';
+                    ctx.fillRect(-s*0.1, -s*1.6, s*0.2, s*0.6);
+                    ctx.strokeRect(-s*0.1, -s*1.6, s*0.2, s*0.6);
+                }
+
                 // Cockpit/Sensor Strip
-                ctx.fillStyle = '#0ff';
+                ctx.fillStyle = en.type === 'missiler' ? '#f00' : (en.type === 'gunner' ? '#ff0' : '#0f0');
                 ctx.beginPath();
                 ctx.moveTo(-s*0.8, -s*0.2);
                 ctx.lineTo(s*0.8, -s*0.2);
@@ -1589,6 +1868,9 @@
                     ctx.beginPath();
                     ctx.rect(-boxSize, -boxSize, boxSize*2, boxSize*2);
                     drawCornerTicks(boxSize, tick);
+                    // Add diagonal lines for max lock
+                    ctx.moveTo(-boxSize, -boxSize); ctx.lineTo(boxSize, boxSize);
+                    ctx.moveTo(boxSize, -boxSize); ctx.lineTo(-boxSize, boxSize);
                     ctx.stroke();
                 } else {
                     // TARGETING MODE: rotating square + corner ticks
@@ -1877,6 +2159,46 @@
                     let rRadius = d.radarRadius;
                     let drProj = project(d.x, d.y, d.z);
                     if (drProj.z > 0) {
+                        // Draw Radar Sweeps
+                        ctx.strokeStyle = 'rgba(0, 255, 255, 0.4)';
+                        ctx.lineWidth = 2;
+                        ctx.beginPath();
+                        let steps = 40;
+                        let first = true;
+                        for(let i=0; i<=steps; i++) {
+                            let a = (i/steps)*Math.PI*2;
+                            let cx = d.x + Math.cos(a)*rRadius;
+                            let cz = d.z + Math.sin(a)*rRadius;
+                            let cy = getTerrainHeight(cx, cz) + 5; // trace ground
+                            let cp = project(cx, cy, cz);
+                            if (cp.z > 0) {
+                                if(first) { ctx.moveTo(cp.x, cp.y); first = false; }
+                                else { ctx.lineTo(cp.x, cp.y); }
+                            }
+                        }
+                        ctx.stroke();
+
+                        // Radar sweep line
+                        let sa = d.radarAngle;
+                        let sx = d.x + Math.cos(sa)*rRadius;
+                        let sz = d.z + Math.sin(sa)*rRadius;
+                        let sy = getTerrainHeight(sx, sz) + 5;
+                        let sp = project(sx, sy, sz);
+                        if (sp.z > 0) {
+                            let sweepGrad = ctx.createLinearGradient(drProj.x, drProj.y, sp.x, sp.y);
+                            sweepGrad.addColorStop(0, 'rgba(0, 255, 255, 0.6)');
+                            sweepGrad.addColorStop(1, 'rgba(0, 255, 255, 0.0)');
+                            ctx.strokeStyle = sweepGrad;
+                            ctx.lineWidth = 4;
+                            ctx.beginPath();
+                            ctx.moveTo(drProj.x, drProj.y);
+                            ctx.lineTo(sp.x, sp.y);
+                            ctx.stroke();
+                        }
+                    }
+                    ctx.restore();
+                    if (drProj.z > 0) renderables.push({ t: 'drone', dist: drProj.z, proj: drProj, obj: d });
+                });
 
                 // Phase 11: Draw Player Sensor Ring (narrow at Lv1, grows per level)
                 (function drawPlayerSensorRing() {
@@ -1904,45 +2226,6 @@
                     ctx.setLineDash([]);
                     ctx.restore();
                 })();
-                         ctx.strokeStyle = 'rgba(0, 255, 255, 0.4)';
-                         ctx.lineWidth = 2;
-                         ctx.beginPath();
-                         let steps = 40;
-                         let first = true;
-                         for(let i=0; i<=steps; i++) {
-                             let a = (i/steps)*Math.PI*2;
-                             let cx = d.x + Math.cos(a)*rRadius;
-                             let cz = d.z + Math.sin(a)*rRadius;
-                             let cy = getTerrainHeight(cx, cz) + 5; // trace ground
-                             let cp = project(cx, cy, cz);
-                             if (cp.z > 0) {
-                                 if(first) { ctx.moveTo(cp.x, cp.y); first = false; }
-                                 else { ctx.lineTo(cp.x, cp.y); }
-                             }
-                         }
-                         ctx.stroke();
-
-                         // Radar sweep line
-                         let sa = d.radarAngle;
-                         let sx = d.x + Math.cos(sa)*rRadius;
-                         let sz = d.z + Math.sin(sa)*rRadius;
-                         let sy = getTerrainHeight(sx, sz) + 5;
-                         let sp = project(sx, sy, sz);
-                         if (sp.z > 0) {
-                             let sweepGrad = ctx.createLinearGradient(drProj.x, drProj.y, sp.x, sp.y);
-                             sweepGrad.addColorStop(0, 'rgba(0, 255, 255, 0.6)');
-                             sweepGrad.addColorStop(1, 'rgba(0, 255, 255, 0.0)');
-                             ctx.strokeStyle = sweepGrad;
-                             ctx.lineWidth = 4;
-                             ctx.beginPath();
-                             ctx.moveTo(drProj.x, drProj.y);
-                             ctx.lineTo(sp.x, sp.y);
-                             ctx.stroke();
-                         }
-                    }
-                    ctx.restore();
-                    if (drProj.z > 0) renderables.push({ t: 'drone', dist: drProj.z, proj: drProj, obj: d });
-                });
 
                 let pProj = project(player.x, player.y, player.z);
                 if (pProj.z > 0) renderables.push({ t: 'p', dist: pProj.z, proj: pProj, obj: player });
@@ -1957,11 +2240,41 @@
             for (let m of missiles) {
                 let p = project(m.x, m.y, m.z);
                 if (p.z > 0) renderables.push({ t: 'm', dist: p.z, proj: p, obj: m });
-            }
+            }            // Draw Data Cores
             for (let c of dataCores) {
                 let p = project(c.x, c.y, c.z);
-                if (p.z > 0) renderables.push({ t: 'core', dist: p.z, proj: p, obj: c });
+                if (p.z > 0) {
+                    ctx.fillStyle = '#ffea00';
+                    ctx.fillRect(p.x - 4*p.scale, p.y - 4*p.scale, 8*p.scale, 8*p.scale);
+                }
             }
+            
+            // Draw Resources (Ammo)
+            for (let r of resources) {
+                let p = project(r.x, r.y, r.z);
+                if (p.z > 0) {
+                    let s = 10 * p.scale;
+                    // Flash if about to despawn (< 5s left)
+                    let alpha = 1.0;
+                    if (r.age > 25.0) {
+                        alpha = Math.floor(performance.now() / 150) % 2 === 0 ? 0.2 : 1.0;
+                    }
+                    ctx.globalAlpha = alpha;
+                    ctx.fillStyle = '#f80';
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 1;
+                    ctx.save();
+                    ctx.translate(p.x, p.y);
+                    ctx.rotate(performance.now() * 0.005);
+                    ctx.beginPath();
+                    ctx.rect(-s, -s, s*2, s*2);
+                    ctx.fill(); ctx.stroke();
+                    ctx.restore();
+                    ctx.globalAlpha = 1.0;
+                }
+            }
+            
+
             for (let part of particles) {
                 let p = project(part.x, part.y, part.z);
                 if (p.z > 0) renderables.push({ t: 'part', dist: p.z, proj: p, obj: part });
@@ -2013,7 +2326,97 @@
                 else if (r.t === 'part') drawParticle(r.proj, r.obj);
             }
             
+            // --- Fog of War / Visibility ---
+            if (!gameState.isOver) {
+                fogCtx.globalCompositeOperation = 'source-over';
+                fogCtx.clearRect(0, 0, width, height);
+                fogCtx.fillStyle = 'rgba(0, 5, 10, 0.98)';
+                fogCtx.fillRect(0, 0, width, height);
+                
+                fogCtx.globalCompositeOperation = 'destination-out';
+                
+                // Helper to carve holes
+                function carveHole(wx, wy, wz, worldRadius) {
+                    let p = project(wx, wy, wz);
+                    if (p.z > 0) {
+                        let rad = p.scale * worldRadius;
+                        let grad = fogCtx.createRadialGradient(p.x, p.y, rad * 0.3, p.x, p.y, rad);
+                        grad.addColorStop(0, 'rgba(0,0,0,1)');
+                        grad.addColorStop(1, 'rgba(0,0,0,0)');
+                        fogCtx.fillStyle = grad;
+                        fogCtx.beginPath();
+                        fogCtx.arc(p.x, p.y, rad, 0, Math.PI * 2);
+                        fogCtx.fill();
+                    }
+                }
+
+                // Player visibility
+                let playerReveal = 80 + (gameState.level - 1) * 80;
+                carveHole(player.x, player.y, player.z, playerReveal * 1.5); 
+                
+                // Drone visibility
+                for (let d of drones) {
+                    carveHole(d.x, d.y, d.z, d.radarRadius * 1.5);
+                }
+                
+                // Boss or exploding enemies can cast slight light
+                for (let e of enemies) {
+                    if (e.isBoss) carveHole(e.x, e.y, e.z, e.radius * 3);
+                }
+                
+                ctx.drawImage(fogCanvas, -shakeX, -shakeY); 
+            }
+            
             ctx.restore(); // restore shake translation
+            
+            // --- UI Overlays ---
+            
+            // Update and Draw UI Messages (Combat Log)
+            ctx.textAlign = 'right';
+            ctx.font = '16px monospace';
+            for (let i = uiMessages.length - 1; i >= 0; i--) {
+                let msg = uiMessages[i];
+                msg.time -= 1/60; // rough decrement assuming 60fps for UI overlay
+                if (msg.time <= 0) {
+                    uiMessages.splice(i, 1);
+                    continue;
+                }
+                
+                let alpha = Math.min(1.0, msg.time);
+                ctx.fillStyle = msg.color;
+                ctx.globalAlpha = alpha;
+                // Draw in bottom right corner
+                let lineY = height - 40 - ((uiMessages.length - 1 - i) * 20);
+                ctx.fillText(msg.text, width - 20, lineY);
+            }
+            ctx.globalAlpha = 1.0;
+            
+            // Crosshair
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.4)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(width/2, height/2 - 50, 60, 0, Math.PI*2);
+            ctx.stroke();
+
+            // AMMO UI HUD update
+            let now = performance.now();
+            let maxCapacity = 100 + (gameState.level - 1) * 50; 
+            ctx.fillStyle = '#fff';
+            ctx.font = '24px monospace';
+            ctx.textAlign = 'right';
+            ctx.fillText(`AMMO: ${gameState.ammo} / ${maxCapacity}`, width - 20, 60);
+
+            // Reload / Out of Ammo Warnings overlay on the ammo bar
+            let alertDiv = document.getElementById('ammo-alert');
+            if (gameState.reloadTimer > 0) {
+                alertDiv.innerText = `RELOADING... ${(gameState.reloadTimer).toFixed(1)}s`;
+                alertDiv.style.color = Math.floor(now / 150) % 2 === 0 ? '#f00' : '#fff';
+            } else if (gameState.ammo < gameState.maxLocks) {
+                alertDiv.innerText = `OUT OF AMMO! FIND RESOURCES!`;
+                alertDiv.style.color = Math.floor(now / 200) % 2 === 0 ? '#f80' : '#f00';
+            } else {
+                alertDiv.innerText = '';
+            }
         }
 
         function gameLoop(now) {
