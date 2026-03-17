@@ -221,7 +221,8 @@
             ammo: 100, // Boosted starting ammo
             reloadTimer: 0,
             totalFiredSinceReload: 0,
-            resourceSpawnTimer: 0
+            resourceSpawnTimer: 0,
+            maxLockLogSent: false
         };
         
         document.getElementById('bestScoreVal').innerText = gameState.highScore;
@@ -836,8 +837,17 @@
                 if (totalLocks > 0 && gameState.reloadTimer <= 0) {
                     let alertMsg = isSaturated ? "MAX LOCKS REACHED" : `LOCKING... (${totalLocks})`;
                     document.getElementById('ammo-alert').innerText = alertMsg;
+
+                    // Log notification for Max Lock
+                    if (totalLocks >= gameState.maxLocks && !gameState.maxLockLogSent) {
+                        addMessage("> READY: MAX LOCKS REACHED. FIRE AT WILL!", "#0ff");
+                        gameState.maxLockLogSent = true;
+                    }
                 } else {
                     document.getElementById('ammo-alert').innerText = "";
+                    if (totalLocks < gameState.maxLocks) {
+                        gameState.maxLockLogSent = false;
+                    }
                 }
             }
             
@@ -1769,9 +1779,9 @@
 
                 // Rotating Hex Plates
                 let plates = 6;
-                let rot = performance.now() * 0.001;
+                let bRot = performance.now() * 0.001;
                 for (let i = 0; i < plates; i++) {
-                    let ang = (i / plates) * Math.PI * 2 + rot;
+                    let ang = (i / plates) * Math.PI * 2 + bRot;
                     let px = Math.cos(ang) * s * 2.5;
                     let py = Math.sin(ang) * s * 2.5;
                     
@@ -1779,7 +1789,6 @@
                     ctx.translate(px, py);
                     ctx.rotate(ang + Math.PI/2);
                     
-                    // Plate Shape (Hexagonal)
                     ctx.fillStyle = (i < activeLaunchers) ? '#222' : '#111';
                     ctx.strokeStyle = (i < activeLaunchers) ? '#0df' : '#444';
                     ctx.lineWidth = 3;
@@ -1793,14 +1802,12 @@
                     ctx.closePath();
                     ctx.fill(); ctx.stroke();
                     
-                    // Energy Vents
                     if (Math.random() < 0.2) {
                         ctx.fillStyle = '#0ff';
                         ctx.beginPath(); ctx.arc(0, 0, s*0.2, 0, Math.PI*2); ctx.fill();
                     }
                     ctx.restore();
                     
-                    // Energy Arcs to center
                     ctx.strokeStyle = 'rgba(0, 255, 255, 0.2)';
                     ctx.lineWidth = 1;
                     ctx.beginPath();
@@ -1808,41 +1815,7 @@
                     ctx.lineTo(px, py);
                     ctx.stroke();
                 }
-
-                // HP Bar
-                let hpRatio = en.hp / en.maxHp;
-                ctx.fillStyle = 'rgba(255,0,0,0.3)'; ctx.fillRect(-s*2, -s*3.5, s*4, 15);
-                ctx.fillStyle = '#f00'; ctx.fillRect(-s*2, -s*3.5, s*4 * hpRatio, 15);
-                ctx.strokeStyle = '#fff'; ctx.strokeRect(-s*2, -s*3.5, s*4, 15);
-
-                // VIEW-FINDER ON BOSS
-                if (en.locks > 0) {
-                    let isMax = en.locks >= 15;
-                    ctx.save();
-                    ctx.strokeStyle = isMax ? '#f00' : '#0ff';
-                    ctx.lineWidth = isMax ? 6 : 2;
-                    let b = s * (isMax ? 2.5 : 2.0);
-                    
-                    // Rotating outer frame
-                    ctx.rotate(performance.now() * 0.002);
-                    ctx.strokeRect(-b, -b, b*2, b*2);
-                    
-                    if (isMax) {
-                        // Diagonals for MAX LOCK
-                        ctx.beginPath();
-                        ctx.moveTo(-b, -b); ctx.lineTo(b, b);
-                        ctx.moveTo(b, -b); ctx.lineTo(-b, b);
-                        ctx.stroke();
-                    }
-                    ctx.restore();
-                }
-
-                ctx.restore();
-                return;
-            }
-
-            if (en.type === 'launcher') {
-                // Core Launcher Visuals (Hexagonal energy pods)
+            } else if (en.type === 'launcher') {
                 let sL = s * 0.8;
                 ctx.fillStyle = '#111'; ctx.strokeStyle = '#0ff'; ctx.lineWidth = 3;
                 ctx.beginPath();
@@ -1851,109 +1824,93 @@
                     ctx.lineTo(Math.cos(a)*sL, Math.sin(a)*sL);
                 }
                 ctx.closePath(); ctx.fill(); ctx.stroke();
-                // Core glow
                 ctx.fillStyle = '#0ff'; ctx.globalAlpha = 0.5 + Math.sin(performance.now()*0.01)*0.3;
                 ctx.beginPath(); ctx.arc(0,0, sL*0.4, 0, Math.PI*2); ctx.fill();
                 ctx.globalAlpha = 1.0;
-                ctx.restore();
-                return;
-            }
-
-            if (en.type === 'interceptor') {
-                // Interceptor Visuals (Sleek red dart)
+            } else if (en.type === 'interceptor') {
                 let sI = s * 1.2;
                 ctx.fillStyle = '#300'; ctx.strokeStyle = '#f22'; ctx.lineWidth = 2;
                 ctx.beginPath();
                 ctx.moveTo(0, -sI); ctx.lineTo(sI*0.5, sI*0.8); ctx.lineTo(0, sI*0.4); ctx.lineTo(-sI*0.5, sI*0.8);
                 ctx.closePath(); ctx.fill(); ctx.stroke();
                 ctx.fillStyle = '#f22'; ctx.beginPath(); ctx.arc(0, 0, sI*0.2, 0, Math.PI*2); ctx.fill();
-                ctx.restore();
-                return;
-            }
-
-            if (en.type === 'escort') {
-                // Escort Drone (Neon Blue)
+            } else if (en.type === 'escort') {
                 let sD = s * 0.8;
                 ctx.fillStyle = '#055'; ctx.strokeStyle = '#0df'; ctx.lineWidth = 2;
                 ctx.beginPath(); ctx.moveTo(0, -sD); ctx.lineTo(sD, sD); ctx.lineTo(-sD, sD); ctx.closePath(); ctx.fill(); ctx.stroke();
                 ctx.fillStyle = '#0df'; ctx.beginPath(); ctx.arc(0, 0, sD*0.3, 0, Math.PI*2); ctx.fill();
-                ctx.restore();
-                return;
-            }
+            } else {
+                // --- Standard Enemy ---
+                let typeColor = en.type === 'missiler' ? {d: '#400', l: '#800', bodyD: '#300', bodyL: '#600', bodyT: '#822'} 
+                              : en.type === 'gunner' ? {d: '#440', l: '#880', bodyD: '#330', bodyL: '#660', bodyT: '#882'}
+                              : {d: '#040', l: '#080', bodyD: '#030', bodyL: '#060', bodyT: '#282'};
 
-            // --- Standard Enemy Logic ---
-            let typeColor = en.type === 'missiler' ? {d: '#400', l: '#800', bodyD: '#300', bodyL: '#600', bodyT: '#822'} 
-                          : en.type === 'gunner' ? {d: '#440', l: '#880', bodyD: '#330', bodyL: '#660', bodyT: '#882'}
-                          : {d: '#040', l: '#080', bodyD: '#030', bodyL: '#060', bodyT: '#282'}; // patrol
+                let darkColor = en.targeted ? '#800' : typeColor.d;
+                let lightColor = en.targeted ? '#f55' : typeColor.l;
 
-            let darkColor = en.targeted ? '#800' : typeColor.d;
-            let lightColor = en.targeted ? '#f55' : typeColor.l;
-
-            function dPL(startX, startY, endX, endY, width, colDark, colLight) {
-                ctx.fillStyle = colLight; ctx.beginPath(); ctx.moveTo(startX, startY); ctx.lineTo(endX + width/2, endY); ctx.lineTo(endX, endY + width/2); ctx.closePath(); ctx.fill(); ctx.stroke();
-                ctx.fillStyle = colDark; ctx.beginPath(); ctx.moveTo(startX, startY); ctx.lineTo(endX, endY + width/2); ctx.lineTo(endX - width/2, endY); ctx.closePath(); ctx.fill(); ctx.stroke();
-            }
-
-            let lB = [
-                {x: -s*0.8, y: -s*0.2, phase: 0}, {x: s*0.8, y: -s*0.2, phase: Math.PI},
-                {x: -s*1.2, y: s*0.4, phase: Math.PI*0.66}, {x: s*1.2, y: s*0.4, phase: Math.PI*1.66},
-                {x: -s*0.9, y: s*0.8, phase: Math.PI*1.33}, {x: s*0.9, y: s*0.8, phase: Math.PI*0.33}
-            ];
-
-            // Back legs
-            for (let i=0; i<2; i++) {
-                let leg = lB[i]; let lift = Math.sin(walkCycle + leg.phase); let stepY = Math.cos(walkCycle + leg.phase) * s * 0.5;
-                let j1x = leg.x + Math.sign(leg.x)*s*0.8; let j1y = leg.y - s*0.8;
-                let fX = leg.x + Math.sign(leg.x)*s*1.6; let fY = leg.y + s*1.2 + stepY - Math.max(0, lift*s*0.6);
-                dPL(leg.x, leg.y, j1x, j1y, s*0.4, darkColor, lightColor); dPL(j1x, j1y, fX, fY, s*0.2, darkColor, lightColor);
-            }
-            // Body
-            ctx.fillStyle = en.targeted ? '#b00' : typeColor.bodyD;
-            ctx.beginPath(); ctx.moveTo(0, -s*1.2); ctx.lineTo(-s*1.5, -s*0.6); ctx.lineTo(-s*1.5, s*0.8); ctx.lineTo(0, s*1.0); ctx.closePath(); ctx.fill(); ctx.stroke();
-            ctx.fillStyle = en.targeted ? '#f55' : typeColor.bodyL;
-            ctx.beginPath(); ctx.moveTo(0, -s*1.2); ctx.lineTo(s*1.5, -s*0.6); ctx.lineTo(s*1.5, s*0.8); ctx.lineTo(0, s*1.0); ctx.closePath(); ctx.fill(); ctx.stroke();
-            ctx.fillStyle = en.targeted ? '#f88' : typeColor.bodyT;
-            ctx.beginPath(); ctx.moveTo(0, -s*1.2); ctx.lineTo(-s*1.5, -s*0.6); ctx.lineTo(0, -s*0.8); ctx.lineTo(s*1.5, -s*0.6); ctx.closePath(); ctx.fill(); ctx.stroke();
-            
-            // Front/Mid legs
-            for (let i=2; i<6; i++) {
-                let leg = lB[i]; let lift = Math.sin(walkCycle + leg.phase); let stepY = Math.cos(walkCycle + leg.phase) * s * 0.5;
-                let j1x = leg.x + Math.sign(leg.x)*s*0.8; let j1y = leg.y - s*0.8;
-                let fX = leg.x + Math.sign(leg.x)*s*1.6; let fY = leg.y + s*1.2 + stepY - Math.max(0, lift*s*0.6);
-                dPL(leg.x, leg.y, j1x, j1y, s*0.4, darkColor, lightColor); dPL(j1x, j1y, fX, fY, s*0.2, darkColor, lightColor);
-            }
-
-            // Attachments
-            if (en.type === 'missiler') {
-                let pS = s * 0.4; let pH = -s * 2.2; let offs = [{x: -s*0.5, y: -s*1.0}, {x: s*0.5, y: -s*1.0}, {x: -s*0.5, y: -s*1.5}, {x: s*0.5, y: -s*1.5}];
-                for (let p of offs) {
-                    ctx.fillStyle = '#111'; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - pS, p.y + pS*0.5); ctx.lineTo(p.x - pS, pH + pS*0.5); ctx.lineTo(p.x, pH); ctx.closePath(); ctx.fill(); ctx.stroke();
-                    ctx.fillStyle = '#300'; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + pS, p.y + pS*0.5); ctx.lineTo(p.x + pS, pH + pS*0.5); ctx.lineTo(p.x, pH); ctx.closePath(); ctx.fill(); ctx.stroke();
-                    ctx.fillStyle = '#500'; ctx.beginPath(); ctx.moveTo(p.x, pH); ctx.lineTo(p.x - pS, pH + pS*0.5); ctx.lineTo(p.x, pH + pS); ctx.lineTo(p.x + pS, pH + pS*0.5); ctx.closePath(); ctx.fill(); ctx.stroke();
+                function dPL(startX, startY, endX, endY, width, colDark, colLight) {
+                    ctx.fillStyle = colLight; ctx.beginPath(); ctx.moveTo(startX, startY); ctx.lineTo(endX + width/2, endY); ctx.lineTo(endX, endY + width/2); ctx.closePath(); ctx.fill(); ctx.stroke();
+                    ctx.fillStyle = colDark; ctx.beginPath(); ctx.moveTo(startX, startY); ctx.lineTo(endX, endY + width/2); ctx.lineTo(endX - width/2, endY); ctx.closePath(); ctx.fill(); ctx.stroke();
                 }
-            } else if (en.type === 'gunner') {
-                ctx.fillStyle = '#222'; ctx.fillRect(-s*1.2, -s*0.5, s*2.4, s*0.3); ctx.strokeRect(-s*1.2, -s*0.5, s*2.4, s*0.3);
-                ctx.fillStyle = '#550'; ctx.beginPath(); ctx.arc(0, -s*0.8, s*0.6, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-            } else if (en.type === 'patrol') {
-                let spin = performance.now() * 0.005;
-                ctx.save(); ctx.translate(0, -s*1.6); ctx.rotate(spin);
-                ctx.fillStyle = '#0a0'; ctx.strokeStyle = '#0f0';
-                ctx.beginPath(); ctx.ellipse(0, 0, s*0.8, s*0.3, 0, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-                ctx.beginPath(); ctx.arc(0, 0, s*0.2, 0, Math.PI*2); ctx.fillStyle = '#ff0'; ctx.fill();
-                ctx.restore();
-                ctx.fillStyle = '#111'; ctx.fillRect(-s*0.1, -s*1.6, s*0.2, s*0.6); ctx.strokeRect(-s*0.1, -s*1.6, s*0.2, s*0.6);
+
+                let lB = [
+                    {x: -s*0.8, y: -s*0.2, phase: 0}, {x: s*0.8, y: -s*0.2, phase: Math.PI},
+                    {x: -s*1.2, y: s*0.4, phase: Math.PI*0.66}, {x: s*1.2, y: s*0.4, phase: Math.PI*1.66},
+                    {x: -s*0.9, y: s*0.8, phase: Math.PI*1.33}, {x: s*0.9, y: s*0.8, phase: Math.PI*0.33}
+                ];
+
+                for (let i=0; i<2; i++) {
+                    let leg = lB[i]; let lift = Math.sin(walkCycle + leg.phase); let stepY = Math.cos(walkCycle + leg.phase) * s * 0.5;
+                    let j1x = leg.x + Math.sign(leg.x)*s*0.8; let j1y = leg.y - s*0.8;
+                    let fX = leg.x + Math.sign(leg.x)*s*1.6; let fY = leg.y + s*1.2 + stepY - Math.max(0, lift*s*0.6);
+                    dPL(leg.x, leg.y, j1x, j1y, s*0.4, darkColor, lightColor); dPL(j1x, j1y, fX, fY, s*0.2, darkColor, lightColor);
+                }
+                ctx.fillStyle = en.targeted ? '#b00' : typeColor.bodyD;
+                ctx.beginPath(); ctx.moveTo(0, -s*1.2); ctx.lineTo(-s*1.5, -s*0.6); ctx.lineTo(-s*1.5, s*0.8); ctx.lineTo(0, s*1.0); ctx.closePath(); ctx.fill(); ctx.stroke();
+                ctx.fillStyle = en.targeted ? '#f55' : typeColor.bodyL;
+                ctx.beginPath(); ctx.moveTo(0, -s*1.2); ctx.lineTo(s*1.5, -s*0.6); ctx.lineTo(s*1.5, s*0.8); ctx.lineTo(0, s*1.0); ctx.closePath(); ctx.fill(); ctx.stroke();
+                ctx.fillStyle = en.targeted ? '#f88' : typeColor.bodyT;
+                ctx.beginPath(); ctx.moveTo(0, -s*1.2); ctx.lineTo(-s*1.5, -s*0.6); ctx.lineTo(0, -s*0.8); ctx.lineTo(s*1.5, -s*0.6); ctx.closePath(); ctx.fill(); ctx.stroke();
+                
+                for (let i=2; i<6; i++) {
+                    let leg = lB[i]; let lift = Math.sin(walkCycle + leg.phase); let stepY = Math.cos(walkCycle + leg.phase) * s * 0.5;
+                    let j1x = leg.x + Math.sign(leg.x)*s*0.8; let j1y = leg.y - s*0.8;
+                    let fX = leg.x + Math.sign(leg.x)*s*1.6; let fY = leg.y + s*1.2 + stepY - Math.max(0, lift*s*0.6);
+                    dPL(leg.x, leg.y, j1x, j1y, s*0.4, darkColor, lightColor); dPL(j1x, j1y, fX, fY, s*0.2, darkColor, lightColor);
+                }
+
+                if (en.type === 'missiler') {
+                    let pS = s * 0.4; let pH = -s * 2.2; let offs = [{x: -s*0.5, y: -s*1.0}, {x: s*0.5, y: -s*1.0}, {x: -s*0.5, y: -s*1.5}, {x: s*0.5, y: -s*1.5}];
+                    for (let p of offs) {
+                        ctx.fillStyle = '#111'; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - pS, p.y + pS*0.5); ctx.lineTo(p.x - pS, pH + pS*0.5); ctx.lineTo(p.x, pH); ctx.closePath(); ctx.fill(); ctx.stroke();
+                        ctx.fillStyle = '#300'; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + pS, p.y + pS*0.5); ctx.lineTo(p.x + pS, pH + pS*0.5); ctx.lineTo(p.x, pH); ctx.closePath(); ctx.fill(); ctx.stroke();
+                        ctx.fillStyle = '#500'; ctx.beginPath(); ctx.moveTo(p.x, pH); ctx.lineTo(p.x - pS, pH + pS*0.5); ctx.lineTo(p.x, pH + pS); ctx.lineTo(p.x + pS, pH + pS*0.5); ctx.closePath(); ctx.fill(); ctx.stroke();
+                    }
+                } else if (en.type === 'gunner') {
+                    ctx.fillStyle = '#222'; ctx.fillRect(-s*1.2, -s*0.5, s*2.4, s*0.3); ctx.strokeRect(-s*1.2, -s*0.5, s*2.4, s*0.3);
+                    ctx.fillStyle = '#550'; ctx.beginPath(); ctx.arc(0, -s*0.8, s*0.6, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+                } else if (en.type === 'patrol') {
+                    let spin = performance.now() * 0.005;
+                    ctx.save(); ctx.translate(0, -s*1.6); ctx.rotate(spin);
+                    ctx.fillStyle = '#0a0'; ctx.strokeStyle = '#0f0';
+                    ctx.beginPath(); ctx.ellipse(0, 0, s*0.8, s*0.3, 0, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+                    ctx.beginPath(); ctx.arc(0, 0, s*0.2, 0, Math.PI*2); ctx.fillStyle = '#ff0'; ctx.fill();
+                    ctx.restore();
+                    ctx.fillStyle = '#111'; ctx.fillRect(-s*0.1, -s*1.6, s*0.2, s*0.6); ctx.strokeRect(-s*0.1, -s*1.6, s*0.2, s*0.6);
+                }
+                ctx.fillStyle = en.type === 'missiler' ? '#f00' : (en.type === 'gunner' ? '#ff0' : '#0f0');
+                ctx.beginPath(); ctx.moveTo(-s*0.8, -s*0.2); ctx.lineTo(s*0.8, -s*0.2); ctx.lineTo(s*0.6, 0); ctx.lineTo(-s*0.6, 0); ctx.closePath(); ctx.fill();
             }
 
-            // Cockpit/Sensor Strip
-            ctx.fillStyle = en.type === 'missiler' ? '#f00' : (en.type === 'gunner' ? '#ff0' : '#0f0');
-            ctx.beginPath(); ctx.moveTo(-s*0.8, -s*0.2); ctx.lineTo(s*0.8, -s*0.2); ctx.lineTo(s*0.6, 0); ctx.lineTo(-s*0.6, 0); ctx.closePath(); ctx.fill();
-
-            // HP Bar
+            // --- Shared Overlays ---
             let hpRatio = en.hp / en.maxHp;
-            ctx.fillStyle = 'rgba(255,0,0,0.3)'; ctx.fillRect(-s, -s*1.4, s*2, s*0.1);
-            ctx.fillStyle = '#999'; ctx.fillRect(-s, -s*1.4, s*2 * hpRatio, s*0.1);
-            ctx.strokeRect(-s, -s*1.4, s*2, s*0.1);
-
+            let barW = en.isBoss ? s*4 : s*2;
+            let barH = en.isBoss ? 15 : s*0.1;
+            let barY = en.isBoss ? -s*3.5 : -s*1.4;
+            
+            ctx.fillStyle = 'rgba(255,0,0,0.3)'; ctx.fillRect(-barW/2, barY, barW, barH);
+            ctx.fillStyle = en.isBoss ? '#f00' : '#999'; ctx.fillRect(-barW/2, barY, barW * hpRatio, barH);
+            ctx.strokeStyle = en.isBoss ? '#fff' : '#000'; ctx.strokeRect(-barW/2, barY, barW, barH);
 
             if (en.locks > 0) {
                 let isMax = (en.locks >= (en.isBoss ? 15 : 4) || en.locks >= gameState.maxLocks);
@@ -1963,12 +1920,10 @@
                 ctx.save();
                 ctx.translate(0, -s * 0.5);
 
-                // Setup style based on lock state
                 if (isMax) {
                     let flash = Math.floor(performance.now() / 100) % 2 === 0;
                     ctx.strokeStyle = flash ? '#aff' : '#0df';
                     ctx.lineWidth = 4;
-                    // Outer glow
                     ctx.shadowBlur = 15;
                     ctx.shadowColor = '#0df';
                 } else {
@@ -1977,20 +1932,14 @@
                     ctx.shadowBlur = 0;
                 }
 
-                // Square border
                 ctx.beginPath();
                 ctx.rect(-boxSize, -boxSize, boxSize * 2, boxSize * 2);
-                
-                // Diagonal lines
                 ctx.moveTo(-boxSize, -boxSize); ctx.lineTo(boxSize, boxSize);
                 ctx.moveTo(boxSize, -boxSize); ctx.lineTo(-boxSize, boxSize);
-                
-                // Corner ticks for extra tech feel
                 ctx.moveTo(-boxSize, -boxSize + tick); ctx.lineTo(-boxSize, -boxSize); ctx.lineTo(-boxSize + tick, -boxSize);
                 ctx.moveTo(boxSize - tick, -boxSize); ctx.lineTo(boxSize, -boxSize); ctx.lineTo(boxSize, -boxSize + tick);
                 ctx.moveTo(boxSize, boxSize - tick); ctx.lineTo(boxSize, boxSize); ctx.lineTo(boxSize - tick, boxSize);
                 ctx.moveTo(-boxSize + tick, boxSize); ctx.lineTo(-boxSize, boxSize); ctx.lineTo(-boxSize, boxSize - tick);
-                
                 ctx.stroke();
 
                 ctx.restore();
