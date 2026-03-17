@@ -82,28 +82,28 @@
         }
         #hp-bar-bg {
             position: absolute;
-            top: 155px; left: 20px;
-            width: 250px; height: 18px;
-            border: 2px solid #ff8800;
+            top: 145px; left: 20px;
+            width: 80px; height: 6px;
+            border: 1px solid #ff8800;
             background: rgba(0, 0, 0, 0.7);
         }
         #hp-bar {
             width: 100%; height: 100%;
             background: #ff2200;
-            box-shadow: 0 0 10px #ff2200;
+            box-shadow: 0 0 5px #ff2200;
             transition: width 0.2s;
         }
         #ammo-bar-bg {
             position: absolute;
-            top: 195px; left: 20px;
-            width: 250px; height: 18px;
-            border: 2px solid #ff8800;
+            top: 170px; left: 20px;
+            width: 80px; height: 6px;
+            border: 1px solid #ff8800;
             background: rgba(0, 0, 0, 0.7);
         }
         #ammo-bar {
             width: 100%; height: 100%;
             background: #ffaa00;
-            box-shadow: 0 0 10px #ffaa00;
+            box-shadow: 0 0 5px #ffaa00;
             transition: width 0.2s;
         }
         #ammo-alert {
@@ -203,17 +203,19 @@
             <span style="font-size:14px; opacity: 0.7;">HIGH SCORE: <span id="bestScoreVal">0</span></span>
         </div>
         <div id="hp-bar-bg">
-            <div style="position:absolute; top:-16px; left:0; font-size:10px; color:#ff8800;">CONDITION: NORMAL / LIFE STATUS</div>
+            <div style="position:absolute; top:-12px; left:0; font-size:7px; color:#ff8800; white-space:nowrap;">LIFELINE</div>
             <div id="hp-bar"></div>
         </div>
         <div id="ammo-bar-bg">
-            <div style="position:absolute; top:-16px; left:0; font-size:10px; color:#ff8800;">WEAPON SYSTEM / AMMUNITION</div>
+            <div style="position:absolute; top:-12px; left:0; font-size:7px; color:#ff8800; white-space:nowrap;">AMMO</div>
             <div id="ammo-bar"></div>
             <div id="ammo-alert"></div>
         </div>
 
+        <div class="btn-fire" id="mobileFireBtn">FIRE</div>
+        <div class="btn-dash" id="mobileDashBtn">DASH</div>
         
-        <div id="joystick-area" style="position: absolute; top:0; left:0; width:100%; height:100%; pointer-events:auto;">
+        <div id="joystick-area" style="position: absolute; bottom:0; left:0; width:50%; height:50%; pointer-events:auto;">
             <div id="joystick-base" style="display:none;"><div id="joystick-stick"></div></div>
         </div>
 
@@ -487,6 +489,16 @@
         }
         joyArea.addEventListener('touchend', endJoy, {passive: false});
         joyArea.addEventListener('touchcancel', endJoy, {passive: false});
+
+        document.getElementById('mobileFireBtn').addEventListener('touchstart', e => {
+            e.preventDefault();
+            fireMissiles();
+        }, {passive: false});
+        
+        document.getElementById('mobileDashBtn').addEventListener('touchstart', e => {
+            e.preventDefault();
+            doDash();
+        }, {passive: false});
 
         function updateJoy(px, py) {
             let dx = px - joyCenter.x;
@@ -1028,11 +1040,8 @@
             
             // --- Player Movement (360 degrees) ---
             let moveSpeed = 1000 * (player.dashTimer > 0 ? 3.5 : 1.5); // Boosted base speed 1.5x
-            let mx = 0, mz = 0;
-            if (keys.w) mz += 1;
-            if (keys.s) mz -= 1;
-            if (keys.a) mx -= 1;
-            if (keys.d) mx += 1;
+            let mx = (keys.d ? 1 : 0) - (keys.a ? 1 : 0) + joyInput.x;
+            let mz = (keys.w ? 1 : 0) - (keys.s ? 1 : 0) - joyInput.y; // Correct direction for joyInput.y
 
             if (mx !== 0 || mz !== 0) {
                 let mag = Math.hypot(mx, mz);
