@@ -28,27 +28,7 @@
             pointer-events: none;
             z-index: 100;
         }
-        .btn-fire {
-            position: absolute;
-            bottom: 30px; right: 30px;
-            width: 90px; height: 90px;
-            border-radius: 50%;
-            background: rgba(255, 30, 30, 0.2);
-            border: 3px solid #ff3333;
-            color: white;
-            display: flex;
-            align-items: center; justify-content: center;
-            font-weight: bold; font-size: 20px;
-            pointer-events: auto;
-            text-shadow: 0 0 10px #ff3333;
-            box-shadow: 0 0 20px rgba(255, 50, 50, 0.4), inset 0 0 10px rgba(255, 50, 50, 0.4);
-            transition: background 0.1s, transform 0.1s;
-            cursor: pointer;
-        }
-        .btn-fire:active {
-            background: rgba(255, 30, 30, 0.6);
-            transform: scale(0.95);
-        }
+
         #joystick-area {
             /* Invisible touch region */
             pointer-events: auto;
@@ -140,35 +120,10 @@
         @media (max-width: 768px) {
             .instruction { display: none; } /* Hide on mobile to save space */
         }
-        .btn-dash {
-            position: absolute;
-            bottom: 30px; left: 190px;
-            width: 70px; height: 70px;
-            border-radius: 50%;
-            background: rgba(0, 255, 255, 0.2);
-            border: 3px solid #0df;
-            color: white;
-            display: flex;
-            align-items: center; justify-content: center;
-            font-weight: bold; font-size: 16px;
-            pointer-events: auto;
-            text-shadow: 0 0 10px #0df;
-            box-shadow: 0 0 20px rgba(0, 255, 255, 0.4), inset 0 0 10px rgba(0, 255, 255, 0.4);
-            transition: background 0.1s, transform 0.1s;
-            cursor: pointer;
+        @media (max-width: 768px) {
+            .instruction { display: none; } /* Hide on mobile to save space */
         }
-        .btn-dash:active {
-            background: rgba(0, 255, 255, 0.6);
-            transform: scale(0.95);
-        }
-        .btn-dash.cooldown {
-            opacity: 0.5;
-            pointer-events: none;
-            border-color: #555;
-            color: #ccc;
-            box-shadow: none;
-            text-shadow: none;
-        }
+
 
         #titlescreen {
             position: absolute; top: 0; left: 0;
@@ -212,10 +167,7 @@
             <div id="ammo-alert"></div>
         </div>
 
-        <div class="btn-fire" id="mobileFireBtn">FIRE</div>
-        <div class="btn-dash" id="mobileDashBtn">DASH</div>
-        
-        <div id="joystick-area" style="position: absolute; bottom:0; left:0; width:50%; height:50%; pointer-events:auto;">
+        <div id="joystick-area" style="position: absolute; top:0; left:0; width:100%; height:100%; pointer-events:auto;">
             <div id="joystick-base" style="display:none;"><div id="joystick-stick"></div></div>
         </div>
 
@@ -438,6 +390,11 @@
             if (k === 'arrowdown') k = 's';
             if (k === 'arrowleft') k = 'a';
             if (k === 'arrowright') k = 'd';
+            
+            if (k === ' ' || k === 'escape') {
+                fireMissiles();
+            }
+
             if (keys.hasOwnProperty(k)) keys[k] = false;
         });
 
@@ -484,21 +441,13 @@
                     joyInput = { x: 0, y: 0 };
                     joyStick.style.transform = `translate(-50%, -50%)`;
                     document.getElementById('joystick-base').style.display = 'none';
+                    // Tactical Fire: Release to blast
+                    fireMissiles();
                 }
             }
         }
         joyArea.addEventListener('touchend', endJoy, {passive: false});
         joyArea.addEventListener('touchcancel', endJoy, {passive: false});
-
-        document.getElementById('mobileFireBtn').addEventListener('touchstart', e => {
-            e.preventDefault();
-            fireMissiles();
-        }, {passive: false});
-        
-        document.getElementById('mobileDashBtn').addEventListener('touchstart', e => {
-            e.preventDefault();
-            doDash();
-        }, {passive: false});
 
         function updateJoy(px, py) {
             let dx = px - joyCenter.x;
@@ -882,14 +831,13 @@
                     });
                 }
                 
-                // Auto Fire condition: Full barrage OR Target Saturation (all current targets are max-locked)
-                totalLocks = enemies.reduce((sum, e) => sum + e.locks, 0);
-                let isSaturated = totalLocks > 0 && validTargets.length === 0;
-                
-                if ((totalLocks >= gameState.maxLocks || isSaturated) && gameState.reloadTimer <= 0 && gameState.ammo >= totalLocks) {
-                    fireMissiles();
-                } else if ((totalLocks >= gameState.maxLocks || isSaturated) && gameState.reloadTimer <= 0 && gameState.ammo < totalLocks && Math.random() < 0.05) {
-                    addMessage("> CRITICAL: Out of Ammo. COLLECT DATA CORES!", "#f00");
+                // Auto Fire condition: DISABLED for tactical hold-to-lock/release-to-fire
+                // Instead, we just show "LOCKING" status if we have locks
+                if (totalLocks > 0 && gameState.reloadTimer <= 0) {
+                    let alertMsg = isSaturated ? "MAX LOCKS REACHED" : `LOCKING... (${totalLocks})`;
+                    document.getElementById('ammo-alert').innerText = alertMsg;
+                } else {
+                    document.getElementById('ammo-alert').innerText = "";
                 }
             }
             
@@ -2007,55 +1955,43 @@
             ctx.strokeRect(-s, -s*1.4, s*2, s*0.1);
 
 
-            // Locked Visuals (Corner-Tick Viewfinder)
             if (en.locks > 0) {
-                let isMax = (en.locks >= (isBoss ? 15 : 4) || en.locks >= gameState.maxLocks);
-                let rot = performance.now() * 0.003;
-                let boxSize = s * (isBoss ? 1.5 : 2.5);
-                let tick = boxSize * 0.4; // Length of corner tick marks
+                let isMax = (en.locks >= (en.isBoss ? 15 : 4) || en.locks >= gameState.maxLocks);
+                let boxSize = s * (en.isBoss ? 1.5 : 2.0);
+                let tick = boxSize * 0.3;
 
                 ctx.save();
-                ctx.translate(0, -s);
+                ctx.translate(0, -s * 0.5);
 
-                // Helper: draw 4 corner ticks outward from box corners
-                function drawCornerTicks(b, t) {
-                    // Top-left
-                    ctx.moveTo(-b, -b + t); ctx.lineTo(-b, -b); ctx.lineTo(-b + t, -b);
-                    // Top-right
-                    ctx.moveTo(b - t, -b); ctx.lineTo(b, -b); ctx.lineTo(b, -b + t);
-                    // Bottom-right
-                    ctx.moveTo(b, b - t); ctx.lineTo(b, b); ctx.lineTo(b - t, b);
-                    // Bottom-left
-                    ctx.moveTo(-b + t, b); ctx.lineTo(-b, b); ctx.lineTo(-b, b - t);
-                }
-
+                // Setup style based on lock state
                 if (isMax) {
-                    // MAX LOCK: thick glowing square + corner ticks
                     let flash = Math.floor(performance.now() / 100) % 2 === 0;
-                    // Outer glow pass
-                    ctx.strokeStyle = 'rgba(100,255,255,0.25)';
-                    ctx.lineWidth = 9;
-                    ctx.beginPath();
-                    drawCornerTicks(boxSize, tick);
-                    ctx.stroke();
-                    // Crisp foreground
                     ctx.strokeStyle = flash ? '#aff' : '#0df';
                     ctx.lineWidth = 4;
-                    ctx.beginPath();
-                    ctx.rect(-boxSize, -boxSize, boxSize*2, boxSize*2);
-                    drawCornerTicks(boxSize, tick);
-                    // Add diagonal lines for max lock
-                    ctx.moveTo(-boxSize, -boxSize); ctx.lineTo(boxSize, boxSize);
-                    ctx.moveTo(boxSize, -boxSize); ctx.lineTo(-boxSize, boxSize);
-                    ctx.stroke();
+                    // Outer glow
+                    ctx.shadowBlur = 15;
+                    ctx.shadowColor = '#0df';
                 } else {
-                    // Standard acquiring viewfinder
                     ctx.strokeStyle = '#0df';
                     ctx.lineWidth = 2;
-                    ctx.beginPath();
-                    drawCornerTicks(boxSize, tick);
-                    ctx.stroke();
+                    ctx.shadowBlur = 0;
                 }
+
+                // Square border
+                ctx.beginPath();
+                ctx.rect(-boxSize, -boxSize, boxSize * 2, boxSize * 2);
+                
+                // Diagonal lines
+                ctx.moveTo(-boxSize, -boxSize); ctx.lineTo(boxSize, boxSize);
+                ctx.moveTo(boxSize, -boxSize); ctx.lineTo(-boxSize, boxSize);
+                
+                // Corner ticks for extra tech feel
+                ctx.moveTo(-boxSize, -boxSize + tick); ctx.lineTo(-boxSize, -boxSize); ctx.lineTo(-boxSize + tick, -boxSize);
+                ctx.moveTo(boxSize - tick, -boxSize); ctx.lineTo(boxSize, -boxSize); ctx.lineTo(boxSize, -boxSize + tick);
+                ctx.moveTo(boxSize, boxSize - tick); ctx.lineTo(boxSize, boxSize); ctx.lineTo(boxSize - tick, boxSize);
+                ctx.moveTo(-boxSize + tick, boxSize); ctx.lineTo(-boxSize, boxSize); ctx.lineTo(-boxSize, boxSize - tick);
+                
+                ctx.stroke();
 
                 ctx.restore();
             }
